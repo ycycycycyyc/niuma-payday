@@ -4,7 +4,7 @@
 
 ## 开始使用
 
-Windows x64 的免安装版为 `Niuma-1.0.4-windows-x64-portable.exe`。如已运行旧版，请先从系统托盘的牛马鼓励器菜单选择「退出」，再双击新版程序。
+Windows x64 的免安装版为 `Niuma-1.1.0-windows-x64-portable.exe`。如已运行旧版，请先从系统托盘的牛马鼓励器菜单选择「退出」，再双击新版程序。
 
 从源码运行：
 
