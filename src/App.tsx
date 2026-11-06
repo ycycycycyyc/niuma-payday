@@ -57,7 +57,6 @@ function App() {
   const [maximized, setMaximized] = useState(false);
   const [widgetPosition, setWidgetPosition] = useState({ x: 24, y: 24 });
   const [calendarBusy, setCalendarBusy] = useState(false);
-  const [calendarMessage, setCalendarMessage] = useState('');
   const [dayBusy, setDayBusy] = useState(false);
   const drag = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
   const demo = !state.configured;
@@ -68,6 +67,8 @@ function App() {
   const todayKey = dateKey(realNow);
   const todaySchedule = classifyDay(realNow, settings, state.calendar);
   const cachedYear = state.calendar[`${settings.region}-${realNow.getFullYear()}`];
+  const calendarHint = demo ? '只需设置日薪和上下班时间，工作日自动开启。'
+    : !cachedYear && !calendarBusy ? '尚无当年日历，暂按周一至周五运行。' : '';
   const symbol = currencySymbol(settings.currency);
   const isWidget = window.location.hash === '#/widget';
   const amountText = (value: number, digits = 2) => state.privacy ? '••••' : `${symbol}${money(value, digits)}`;
@@ -82,7 +83,7 @@ function App() {
   useEffect(() => { if (!notice) return; const id = setTimeout(() => setNotice(null), notice.error ? 9000 : 4200); return () => clearTimeout(id); }, [notice]);
   useEffect(() => { document.body.classList.toggle('widget-body', isWidget); return () => document.body.classList.remove('widget-body'); }, [isWidget]);
   const save = async (next: AppState) => { const saved = await writeState(next); setState(saved); return saved; };
-  const saveSettings = async (next: SalarySettings) => { await save({ ...state, settings: next, configured: true }); setSettingsOpen(false); setBreakStart(null); setCompletedBreaks(0); setCalendarMessage(''); setToast('日薪已保存。工作日自动计薪，周末和假日安心休息。'); };
+  const saveSettings = async (next: SalarySettings) => { await save({ ...state, settings: next, configured: true }); setSettingsOpen(false); setBreakStart(null); setCompletedBreaks(0); setToast('日薪已保存。工作日自动计薪，周末和假日安心休息。'); };
   const action = async (fn: () => Promise<void>, operation = 'window') => {
     try { await fn(); } catch (error) { showError(error, operation); }
   };
@@ -96,21 +97,23 @@ function App() {
     }
   };
   const restAmount = breakStart === null ? 0 : earningsBetween(settings, new Date(breakStart), now, demo ? {} : state.calendar);
-  const refreshCalendar = async () => {
+  const refreshCalendar = async (manual = false) => {
     if (calendarBusy) return;
     setCalendarBusy(true);
     try {
       if (window.niuma) {
         const result = await window.niuma.refreshCalendar();
-        setCalendarMessage(result.message);
         setState(previous => ({ ...previous, calendar: result.calendar }));
+        if (manual) setNotice({ text: result.message, error: result.status === 'unavailable' });
       } else {
         const calendar = await fetchCalendarYear(settings.region, new Date().getFullYear());
         const latest = await readState();
         await save({ ...latest, calendar: { ...latest.calendar, [`${calendar.region}-${calendar.year}`]: calendar } });
-        setCalendarMessage('节假日日历已更新，离线时也可使用。');
+        if (manual) setToast('日历已更新。');
       }
-    } catch { setCalendarMessage(cachedYear ? '更新失败，继续使用已保存的日历。' : '暂时无法获取日历，按周一至周五运行；假日可点「今天休息」。'); }
+    } catch {
+      if (manual) setNotice({ text: cachedYear ? '更新失败，继续使用已保存的日历。' : '暂时无法获取日历，可手动切换今天上班或休息。', error: true });
+    }
     finally { setCalendarBusy(false); }
   };
   useEffect(() => {
@@ -181,15 +184,22 @@ function App() {
       </header>
 
       <main>
-        <div className="page-heading"><div><h1>{page === 'dashboard' ? <>今日薪动<span className="heading-star" aria-hidden="true">✿</span></> : page === 'playground' ? '快乐实验室' : '我的小勋章'}</h1><p>{page === 'dashboard' ? '看看今天的努力，够不够换一杯喜欢的咖啡。' : page === 'playground' ? '把漫长的工作日，拆成一个个小小的期待。' : `${demo ? '演示成就 · ' : ''}已解锁 ${achievements.filter(a => a.unlocked).length} / ${achievements.length} 项。小小的勋章，送给努力的你。`}</p></div><div className="date-badge"><Sun size={17} /><span>{now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</span></div></div>
+        <div className="page-heading">
+          <div>
+            <h1>{page === 'dashboard' ? <>今日薪动<span className="heading-star" aria-hidden="true">✿</span></> : page === 'playground' ? '快乐实验室' : '我的小勋章'}</h1>
+            {page === 'playground' && <p>把漫长的工作日，拆成一个个小小的期待。</p>}
+            {page === 'achievements' && <p>{demo ? '演示成就 · ' : ''}已解锁 {achievements.filter(a => a.unlocked).length} / {achievements.length} 项。小小的勋章，送给努力的你。</p>}
+          </div>
+          <div className="date-badge"><Sun size={17} /><span>{now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</span></div>
+        </div>
 
         {page === 'dashboard' && <>
           <section className="calendar-banner" aria-label="今天的工作安排">
-            <div className="calendar-status"><span className={`status-dot ${todaySchedule.working ? '' : 'resting'}`} /><div><strong>{demo ? '开始记录我的工资' : `${todaySchedule.reason} · ${settings.startTime}—${settings.endTime}`}</strong><p>{demo ? '只需设置日薪和上下班时间，工作日自动开启。' : calendarMessage || (cachedYear ? `${settings.region === 'HK' ? '香港' : '中国大陆'} ${cachedYear.year} 日历已缓存 · ${new Date(cachedYear.fetchedAt).toLocaleDateString('zh-CN')} 更新` : '尚无当年日历，暂按周一至周五运行。')}</p></div></div>
+            <div className="calendar-status"><span className={`status-dot ${todaySchedule.working ? '' : 'resting'}`} /><div><strong>{demo ? '开始记录我的工资' : `${todaySchedule.reason} · ${settings.startTime}—${settings.endTime}`}</strong>{calendarHint && <p>{calendarHint}</p>}</div></div>
             <div className="day-actions">{demo ? <button className="button primary" onClick={() => setSettingsOpen(true)}>设置我的日薪<ArrowUpRight size={16} /></button> : <>
               <button className="button secondary" disabled={dayBusy} onClick={() => void overrideToday(todaySchedule.working ? 'rest' : 'work')}>{todaySchedule.working ? '今天休息' : '今天上班'}</button>
               {settings.dayOverrides[todayKey] && <button className="text-button" disabled={dayBusy} onClick={() => void overrideToday('auto')}>恢复日历</button>}
-              <button className="text-button" disabled={calendarBusy} onClick={() => void refreshCalendar()}>{calendarBusy ? '更新中…' : '更新日历'}</button>
+              <button className="text-button" disabled={calendarBusy} onClick={() => void refreshCalendar(true)}>{calendarBusy ? '更新中…' : '更新日历'}</button>
             </>}</div>
           </section>
           <div className="dashboard-grid">
@@ -198,7 +208,11 @@ function App() {
               <div className="earnings-caption">今天，已经为自己赚了<button className="icon-button" onClick={togglePrivacy} aria-label={state.privacy ? '显示今日金额' : '隐藏今日金额'}>{state.privacy ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>
               <LiveAmount settings={settings} demo={demo} privacy={state.privacy} calendar={demo ? {} : state.calendar} />
               <div className="earning-rate"><span className="mint-badge"><ArrowUpRight size={15} />{amountText(salary.hourlyRate)} / 小时</span><span>{salary.status === 'working' ? `每一秒，预估 +${state.privacy ? '••••' : `${symbol}${salary.perSecond.toFixed(4)}`}` : salary.status === 'break' ? '午休暂停计薪，好好吃顿饭。' : salary.status === 'after' ? '今天辛苦了，把时间还给生活。' : '工作时段自动开始，不必手动打卡。'}</span></div>
-              <div className="workday-track"><div className="track-label"><span>今日进度 <strong>{(salary.progress * 100).toFixed(1)}%</strong></span><span>{settings.startTime} — {settings.endTime}</span></div><div className="progress-track"><i style={{ width: `${salary.progress * 100}%` }} /><span className="progress-tip" style={{ left: `${Math.min(97, Math.max(3, salary.progress * 100))}%` }}>✦</span></div><div className="track-caption"><span>{salary.status === 'off' ? '今天没有排班，休息也是正经事。' : '一点一点，离自由更近一点。'}</span><span>{settings.lunchEnabled ? '已扣除午休' : '全时段计薪'}</span></div></div>
+              <div className="workday-track">
+                <div className="track-label"><span>今日进度 <strong>{(salary.progress * 100).toFixed(1)}%</strong></span><span>{settings.startTime} — {settings.endTime}</span></div>
+                <div className="progress-track"><i style={{ width: `${salary.progress * 100}%` }} /><span className="progress-tip" style={{ left: `${Math.min(97, Math.max(3, salary.progress * 100))}%` }}>✦</span></div>
+                <div className="track-caption">{settings.lunchEnabled ? '已扣除午休' : '全时段计薪'}</div>
+              </div>
               <div className="hero-footer"><span><Wallet size={14} />{demo ? '演示日薪' : '日薪'} {amountText(settings.dailySalary)}</span><button onClick={() => void action(openWidget, 'widget')}><Monitor size={15} />开启悬浮窗<ArrowUpRight size={15} /></button></div>
             </section>
 
@@ -206,9 +220,9 @@ function App() {
           </div>
 
           <div className="stats-row">
-            <section className="stat-card"><span className="stat-icon lilac"><Wallet size={19} /></span><div><div className="stat-label">本月已赚</div><strong>{amountText(salary.monthEarned)}</strong><p>按日薪 × 本月工作进度估算</p></div></section>
-            <section className="stat-card"><span className="stat-icon peach"><ArrowDownRight size={21} /></span><div><div className="stat-label">距离下班</div><strong className="countdown">{salary.status === 'off' ? '今日休息' : salary.status === 'after' ? '已下班，去生活' : duration(salary.remainingSeconds)}</strong><p>{salary.status === 'before' ? `今天 ${settings.startTime} 开始计薪` : salary.status === 'after' || salary.status === 'off' ? '愿你下班后的时间，属于自己' : '再坚持一下，自由正在靠近'}</p></div></section>
-            <section className="stat-card"><span className="stat-icon yellow"><Coins size={20} /></span><div><div className="stat-label">下次发薪日</div><strong>{salary.daysToPayday === 0 ? '就是今天' : <>{salary.daysToPayday}<small> 天后</small></>}</strong><p>{salary.nextPayday.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}，给钱包充个电</p></div></section>
+            <section className="stat-card"><span className="stat-icon lilac"><Wallet size={19} /></span><div><div className="stat-label">本月已赚</div><strong>{amountText(salary.monthEarned)}</strong></div></section>
+            <section className="stat-card"><span className="stat-icon peach"><ArrowDownRight size={21} /></span><div><div className="stat-label">距离下班</div><strong className="countdown">{salary.status === 'off' ? '今日休息' : salary.status === 'after' ? '已下班，去生活' : duration(salary.remainingSeconds)}</strong></div></section>
+            <section className="stat-card"><span className="stat-icon yellow"><Coins size={20} /></span><div><div className="stat-label">下次发薪日</div><strong title={salary.nextPayday.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}>{salary.daysToPayday === 0 ? '就是今天' : <>{salary.daysToPayday}<small> 天后</small></>}</strong></div></section>
           </div>
 
           <div className="lower-grid"><section className="week-card"><div className="card-top"><div><h3>本周工资 <small>{settings.currency}</small></h3></div></div><div className="week-chart" role="img" aria-label={`本周每日预估收入：${salary.week.map(day => `${day.label} ${amountText(day.earned)}`).join('，')}`}>

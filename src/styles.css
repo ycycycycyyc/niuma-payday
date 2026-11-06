@@ -117,7 +117,7 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .progress-track { position: relative; height: 4px; border-radius: 5px; background: #905e738c; }
 .progress-track > i { display: block; height: 100%; max-width: 100%; border-radius: inherit; background: #edd6ce; transition: width 1s linear; }
 .progress-tip { position: absolute; top: 50%; transform: translate(-50%, -50%); color: #fff7ee; font-size: 17px; line-height: 1; }
-.track-caption { display: flex; justify-content: space-between; gap: 8px; margin-top: 11px; font-size: 9px; color: #f0c9d0; }
+.track-caption { margin-top: 11px; text-align: right; font-size: 9px; color: #f0c9d0; }
 .hero-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 -27px; min-height: 43px; padding: 8px 27px; border-top: 1px solid #d5b0b41c; background: #552840; font-size: 9px; }
 .hero-footer > span { display: inline-flex; align-items: center; gap: 5px; color: #f0c9d0; }
 .hero-footer button { display: inline-flex; align-items: center; gap: 8px; padding: 4px 0; border: 0; background: transparent; color: #fff7ee; font-size: 10px; white-space: nowrap; }
@@ -138,7 +138,7 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .encourage-button > svg:first-child { margin-right: auto; }
 .encourage-button:hover { border-color: #cea8ad; background: #f3e3da; }
 .stats-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 18px 0; }
-.stat-card { display: flex; align-items: flex-start; gap: 12px; padding: 19px 17px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.stat-card { display: flex; align-items: center; gap: 12px; padding: 19px 17px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .stat-card > div { min-width: 0; }
 .stat-icon { display: grid; place-items: center; flex-shrink: 0; width: 35px; height: 35px; border-radius: 10px; color: #765560; background: #f7ebe2; }
 .stat-icon.lilac { background: #f4e6dc; color: #805f66; }
@@ -149,7 +149,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .stat-card strong { display: block; font-size: clamp(18px, 1.8vw, 25px); font-weight: 600; letter-spacing: -.6px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .stat-card strong.countdown { font-size: clamp(16px, 1.65vw, 23px); }
 .stat-card strong small { font-size: 11px; color: #805f66; font-weight: 500; letter-spacing: 0; }
-.stat-card p { margin-top: 7px; font-size: 8px; color: #88666c; line-height: 1.5; }
 .lower-grid { align-items: stretch; }
 .week-card { display: flex; flex-direction: column; padding: 20px 23px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .week-card h3 { margin-top: 6px; font-size: 15px; font-weight: 600; }
@@ -407,7 +406,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .stat-label { font-size: 9px; }
   .stat-card strong { font-size: 20px; }
   .stat-card strong.countdown { font-size: 18px; }
-  .stat-card p { font-size: 7px; }
   .week-card { padding-inline: 19px; }
   .goal-card, .rest-card { padding-inline: 14px; }
   .goal-content { gap: 8px; }
@@ -455,7 +453,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .stat-card strong.countdown { font-size: 18px; }
   .stat-label { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 5px; }
   .stat-label span { font-size: 5px; }
-  .stat-card p { font-size: 8px; }
   .goal-icon { width: 35px; height: 35px; }
   .goal-icon svg { width: 21px; }
   .goal-content h3 { font-size: 11px; }
@@ -552,7 +549,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .stat-card strong { font-size: 18px; }
   .stat-card strong.countdown { font-size: 15px; letter-spacing: -.5px; }
   .stat-card strong small { font-size: 9px; }
-  .stat-card p { font-size: 7px; line-height: 1.7; }
   .week-card { padding: 22px 21px 16px; }
   .week-chart { height: 168px; gap: 10px; }
   .bar-value { font-size: 8px; }
@@ -620,7 +616,7 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .earning-rate, .mint-badge, .track-label, .hero-footer, .hero-footer button { font-size: 11px; }
 .track-caption, .goal-caption, .chart-footer, .week-chart .bar-label { font-size: 10px; }
 .stat-label, .goal-card .section-label, .rest-card .section-label { font-size: 12px; }
-.stat-card p, .goal-content p, .rest-content p, .buddy-copy p { font-size: 10px; }
+.goal-content p, .rest-content p, .buddy-copy p { font-size: 10px; }
 .encourage-button, .rest-button, .day-actions .text-button { font-size: 11px; }
 .mood-card > .card-top { color: #764357; }
 .mood-card .buddy-label { font-size: 9px; }
@@ -628,7 +624,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 @media (max-width: 600px) {
   .earnings-caption { font-size: 13px; }
   .stat-label { font-size: 11px; }
-  .stat-card p { font-size: 9px; }
   .track-caption, .hero-footer, .hero-footer button { font-size: 9px; }
   .mood-card .buddy-label { font-size: 7px; }
   .rest-button { min-height: 38px; }
