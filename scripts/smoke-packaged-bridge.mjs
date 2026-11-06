@@ -14,6 +14,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import asar from '@electron/asar';
+import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 
 const originalCwd = process.cwd();
 const archiveArg = process.argv.slice(2).find(value => !value.startsWith('--'));
@@ -47,6 +48,7 @@ let cursor = { x: 0, y: 0 };
 const screen = Object.assign(new EventEmitter(), {
   getCursorScreenPoint: () => cursor,
   getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+  getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
 });
 const app = Object.assign(new EventEmitter(), {
   commandLine: { hasSwitch: () => false },
@@ -66,7 +68,7 @@ const app = Object.assign(new EventEmitter(), {
     this.emit('will-quit');
   },
 });
-const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) };
+const ipcMain = Object.assign(new EventEmitter(), { handle: (channel, handler) => handlers.set(channel, handler) });
 
 class Tray extends EventEmitter {
   setToolTip() {}
@@ -107,7 +109,6 @@ class BrowserWindow extends EventEmitter {
     this.options = options;
     this.visible = false;
     this.minimized = false;
-    this.mouseIgnored = false;
     this.destroyed = false;
     this.id = windows.length + 1;
     this.bounds = { x: 0, y: 0, ...options };
@@ -133,7 +134,9 @@ class BrowserWindow extends EventEmitter {
     const hash = options.hash ? '#' + options.hash : '';
     this.webContents.url = pathToFileURL(file).href + hash;
     this.bridgeEvents = new EventEmitter();
+    this.documentEvents = new EventEmitter();
     const ipcRenderer = Object.assign(this.bridgeEvents, {
+      send: channel => ipcMain.emit(channel, { sender: this.webContents, senderFrame: frameFor(this) }),
       invoke: async (channel, ...args) => {
         const senderFrame = frameFor(this);
         const event = {
@@ -158,6 +161,8 @@ class BrowserWindow extends EventEmitter {
         return { ipcRenderer, contextBridge };
       },
       process: { platform: 'win32' },
+      location: { hash },
+      document: { addEventListener: (type, listener) => this.documentEvents.on(type, listener) },
     };
     vm.runInNewContext(preload, sandbox, { filename: 'packaged-preload.cjs' });
     queueMicrotask(() => this.emit('ready-to-show'));
@@ -174,7 +179,6 @@ class BrowserWindow extends EventEmitter {
 
   hide() {
     this.visible = false;
-    this.emit('hide');
   }
 
   isVisible() {
@@ -229,8 +233,9 @@ class BrowserWindow extends EventEmitter {
   }
 
   focus() {}
-  setIgnoreMouseEvents(ignore) {
+  setIgnoreMouseEvents(ignore, options) {
     this.mouseIgnored = ignore;
+    this.mouseForwarded = options?.forward === true;
   }
   setAlwaysOnTop() {}
   setVisibleOnAllWorkspaces() {}
@@ -309,22 +314,29 @@ try {
   await api.showWidget();
   assert.equal(windows.length, 2);
   const widgetApi = windows[1].bridge;
-  const widget = windows[1];
-  const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
-  if (!['1.0.0', '1.0.1'].includes(releaseVersion)) {
+  const pointerChannel = 'niuma:widget-pointer-crossed';
+  if (ipcMain.listenerCount(pointerChannel)) {
+    const widget = windows[1];
     const bounds = widget.getBounds();
-    assert.deepEqual(bounds, { width: 350, height: 232, x: oldCardPosition.x, y: oldCardPosition.y - 72 });
+    assert.deepEqual(bounds, {
+      width: widgetLayout.width, height: widgetLayout.cardHeight + widgetLayout.laneHeight,
+      x: oldCardPosition.x, y: oldCardPosition.y - widgetLayout.laneHeight,
+    });
     screen.emit('display-metrics-changed');
     assert.deepEqual(widget.getBounds(), bounds);
     if (process.platform === 'win32' || process.platform === 'darwin') {
-      cursor = { x: bounds.x + 40, y: bounds.y + 71 };
-      await new Promise(resolve => setTimeout(resolve, 70));
-      assert.equal(widget.mouseIgnored, true);
-      cursor.y++;
-      // The native draggable card does not necessarily deliver a DOM mouseleave.
-      await new Promise(resolve => setTimeout(resolve, 70));
+      const laneEvent = { isTrusted: true, target: { classList: { contains: value => value === 'widget-pet-lane' } } };
+      cursor = { x: bounds.x + 40, y: bounds.y + widgetLayout.laneHeight - 1 };
+      ipcMain.emit(pointerChannel, { sender: windows[0].webContents, senderFrame: frameFor(windows[0]) });
+      ipcMain.emit(pointerChannel, { sender: widget.webContents, senderFrame: frameFor(widget, true) });
       assert.equal(widget.mouseIgnored, false);
-      pass('packaged widget passes pet-lane clicks through and restores card hit testing without DOM mouse events');
+      widget.documentEvents.emit('mouseenter', laneEvent);
+      assert.equal(widget.mouseIgnored, true);
+      assert.equal(widget.mouseForwarded, true);
+      cursor.y++;
+      widget.documentEvents.emit('mouseleave', laneEvent);
+      assert.equal(widget.mouseIgnored, false);
+      pass('packaged widget forwards pet-lane mouse movement, restores card hit testing and ignores unauthorized callers');
     }
     pass('floating window preserves the legacy card position across display changes');
   }
@@ -345,6 +357,7 @@ try {
   app.removeAllListeners();
   screen.removeAllListeners();
   electronHost.powerMonitor.removeAllListeners();
+  ipcMain.removeAllListeners();
   handlers.clear();
   windows.length = 0;
   await import(mainURL + '?fresh-main=2');

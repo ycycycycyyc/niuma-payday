@@ -276,90 +276,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .advanced-settings > summary { color: #805f66; font-size: 12px; cursor: pointer; }
 .advanced-settings[open] > summary { margin-bottom: 20px; }
 
-/* The dog's lane sits above the 350 × 160 salary card. */
-html:has(body.widget-body) { background: transparent; }
-body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
-.widget-body #root { width: 100vw; height: 100dvh; overflow: hidden; }
-.widget-stack, .browser-widget-host {
-  --widget-width: 350px;
-  --card-height: 160px;
-  --lane-height: 72px;
-  width: var(--widget-width);
-  max-width: 100%;
-}
-.widget-pet-lane {
-  --pet-size: 76px;
-  --patrol-time: 16s;
-  position: relative;
-  z-index: 1;
-  height: var(--lane-height);
-  pointer-events: none;
-}
-.widget-body .widget-pet-lane { pointer-events: auto; -webkit-app-region: no-drag; }
-.pet-traveller {
-  position: absolute;
-  left: 12px;
-  bottom: -2px;
-  width: calc(100% - var(--pet-size) - 24px);
-  pointer-events: none;
-  animation: pet-patrol var(--patrol-time) linear infinite;
-}
-.pet-facing { width: var(--pet-size); animation: pet-turn var(--patrol-time) step-end infinite; }
-.pet-sprite {
-  width: var(--pet-size);
-  height: var(--pet-size);
-  background: url('./assets/widget-dog-walk.webp') left center / 400% 100% repeat-x;
-  animation: pet-footsteps .8s steps(4, end) infinite;
-}
-@keyframes pet-patrol {
-  0%, 90%, 100% { transform: translateX(0); }
-  40%, 50% { transform: translateX(100%); }
-}
-/* Lock to a single paw pose while pausing, and turn before walking back. */
-@keyframes pet-turn {
-  0% { transform: scaleX(1); --stride-end: calc(-4 * var(--pet-size)); }
-  40% { transform: scaleX(1); --stride-end: 0px; }
-  46% { transform: scaleX(-1); --stride-end: 0px; }
-  50% { transform: scaleX(-1); --stride-end: calc(-4 * var(--pet-size)); }
-  90% { transform: scaleX(-1); --stride-end: 0px; }
-  96%, 100% { transform: scaleX(1); --stride-end: 0px; }
-}
-@keyframes pet-footsteps {
-  from { background-position-x: 0px; }
-  to { background-position-x: var(--stride-end); }
-}
-.widget-pet-lane[data-paused] :is(.pet-traveller, .pet-facing, .pet-sprite) { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) {
-  .pet-sprite { background-position-x: calc(-1 * var(--pet-size)); }
-}
-.widget { position: relative; display: flex; flex-direction: column; width: 100%; height: var(--card-height); padding: 15px 18px 14px; border: 1px solid #905e733f; border-radius: 16px; background: #5e2d46; color: #fff7ee; overflow: hidden; user-select: none; -webkit-app-region: drag; }
-.widget-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #f9dee0; font-size: 10px; }
-.widget-head > span { display: inline-flex; align-items: center; gap: 7px; }
-.widget-grip { margin-left: auto; color: #dfb8c2; }
-.widget-actions { display: flex; align-items: center; gap: 5px; -webkit-app-region: no-drag; }
-.widget-actions button { display: grid; place-items: center; width: 23px; height: 23px; padding: 0; border: 0; border-radius: 6px; background: #edd8d00a; color: #f9dee0; -webkit-app-region: no-drag; }
-.widget-actions button:hover { background: #87546b; color: #fff7ee; }
-.widget .live-amount { margin: 4px 0 7px; letter-spacing: -1.5px; }
-.widget .live-amount .currency { margin-right: 7px; font-size: 23px; }
-.widget .live-amount .amount-integer { font-size: 46px; }
-.widget .live-amount .amount-decimal { font-size: 30px; letter-spacing: -1px; }
-.widget-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: auto; color: #f0c9d0; font-size: 9px; font-variant-numeric: tabular-nums; }
-.widget-foot > span:last-child { color: #f9dee0; }
-.widget-progress { position: absolute; bottom: 0; left: 0; width: 100%; height: 3px; background: #824f66; }
-.widget-progress i { display: block; height: 100%; background: #e6cbc7; }
-.browser-widget-host {
-  position: fixed;
-  z-index: 50;
-  right: clamp(0px, var(--widget-right), 100vw - var(--widget-width));
-  bottom: clamp(0px, var(--widget-bottom), 100dvh - var(--lane-height) - var(--card-height));
-  max-width: 100vw;
-  pointer-events: none;
-  touch-action: none;
-  cursor: grab;
-}
-.browser-widget-host:active { cursor: grabbing; }
-.widget-preview { -webkit-app-region: no-drag; }
-
 /* Strawberry stationery: uncoated peach paper, raspberry ink and a milk-cow stamp. */
 .sidebar { background: #fffaf2; }
 .brand-mark { border-radius: 13px; background: #f7dbe1; color: #883b5b; }
@@ -386,16 +302,15 @@ body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
 .earnings-card .icon-button { color: #e7b5c4; }
 .earnings-card .icon-button:hover { background: #803f59; color: #fff8f1; }
 .earnings-card .live-amount { --max-figure: 74px; }
-.widget .live-amount { --max-figure: 47px; }
-.earnings-card .live-amount, .widget .live-amount { color: #fff9ef; font-size: min(var(--max-figure), calc(98cqi / (var(--amount-chars, 4) * .67 + 2.35))); }
-.earnings-card .live-amount .amount-integer, .widget .live-amount .amount-integer { font-size: 1em; letter-spacing: -.055em; }
-.earnings-card .live-amount .amount-decimal, .widget .live-amount .amount-decimal { font-size: .68em; letter-spacing: -.05em; color: #f0bdcb; }
-.earnings-card .live-amount .currency, .widget .live-amount .currency { font-size: .42em; letter-spacing: -.035em; margin-right: .18em; }
+.earnings-card .live-amount { color: #fff9ef; font-size: min(var(--max-figure), calc(98cqi / (var(--amount-chars, 4) * .67 + 2.35))); }
+.earnings-card .live-amount .amount-integer { font-size: 1em; letter-spacing: -.055em; }
+.earnings-card .live-amount .amount-decimal { font-size: .68em; letter-spacing: -.05em; color: #f0bdcb; }
+.earnings-card .live-amount .currency { font-size: .42em; letter-spacing: -.035em; margin-right: .18em; }
 .earning-rate, .track-label, .track-caption { color: #ecc6ce; }
 .mint-badge { color: #fff3d1; background: #f6dc9c1b; }
 .track-label strong { color: #fff4e9; }
 .progress-track { background: #92536a; }
-.progress-track > i, .widget-progress i { background: #ffc4c2; }
+.progress-track > i { background: #ffc4c2; }
 .progress-tip { color: #ffe2b2; }
 .hero-footer { background: #55243c; border-top: 1px dashed #bc8a996b; }
 .hero-footer > span { color: #e3bac7; }
@@ -455,16 +370,6 @@ body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
 .goal-dialog { background: #fffaf1; }
 .toast { background: #632e46; border-color: #83465e; color: #fff7ed; }
 .toast > svg { color: #efdb9f; }
-.widget { container-type: inline-size; background: #642d47; color: #fff8ee; border-color: #895369; }
-.widget-head, .widget-foot { color: #eec5cf; }
-.widget-head .status-dot { background: #dce8ab; }
-.widget-head .status-dot.resting { background: #ddb2be; }
-.widget-grip { color: #e1b4bf; }
-.widget-actions button { color: #f3d5de; background: #f6d5d811; }
-.widget-actions button:hover { color: #fff8ed; background: #854963; }
-.widget-foot > span:last-child { color: #ffe7d6; }
-.widget-progress { background: #95566c; }
-.widget-preview { pointer-events: auto; box-shadow: inset 0 0 0 1px #ffffff08, 0 14px 40px #5629413d; }
 
 @media (min-width: 1500px) {
   main { padding: 38px 44px 24px; }
@@ -710,7 +615,7 @@ body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
 .calendar-banner .button, .earnings-card .section-label { font-size: 12px; }
 .earnings-caption { font-size: 14px; }
 .earning-rate, .mint-badge, .track-label, .hero-footer, .hero-footer button { font-size: 11px; }
-.track-caption, .goal-caption, .chart-footer, .week-chart .bar-label, .widget-foot { font-size: 10px; }
+.track-caption, .goal-caption, .chart-footer, .week-chart .bar-label { font-size: 10px; }
 .stat-label, .goal-card .section-label, .rest-card .section-label { font-size: 12px; }
 .stat-card p, .goal-content p, .rest-content p, .buddy-copy p { font-size: 10px; }
 .encourage-button, .rest-button, .day-actions .text-button { font-size: 11px; }

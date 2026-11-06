@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { fetchCalendarYear, isValidDateKey, normalizeCalendarCache } from '../shared/calendar.mjs';
 import { createWidgetSession, decideWidget, dismissWidget, getActiveShift, markManualWidget } from '../shared/scheduler.mjs';
 import { createEntryPolicy, isTrustedIpc } from '../shared/ipc-origin.mjs';
+import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
+import { fullWidgetHeight, petLaneHeight, widgetBoundsInWorkArea } from '../shared/widget-geometry.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const developmentURL = process.env.VITE_DEV_SERVER_URL;
@@ -28,15 +30,11 @@ let quitting = false;
 let appState = null;
 let desktopState = {};
 let positionTimer;
-let lanePointerTimer;
-let widgetPassesClicks = false;
 let scheduleTimer;
 let widgetSession = createWidgetSession();
 let widgetRequest = 0;
 const calendarJobs = new Map();
 const calendarAttempts = new Map();
-const PET_LANE_HEIGHT = 72;
-const WIDGET_CARD_HEIGHT = 160;
 const CALENDAR_TTL = 7 * 24 * 60 * 60 * 1000;
 const RETRY_DELAY = 6 * 60 * 60 * 1000;
 let calendarStatus = { status: 'idle', message: '节假日日历尚未更新', calendar: {} };
@@ -174,55 +172,36 @@ function createMainWindow() {
 }
 
 function fitWidgetBounds(saved) {
-  const width = 350;
-  const height = WIDGET_CARD_HEIGHT + PET_LANE_HEIGHT;
-  const valid = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y);
-  const point = valid ? { x: Math.round(saved.x), y: Math.round(saved.y) } : screen.getCursorScreenPoint();
-  const area = screen.getDisplayNearestPoint(point).workArea;
-  return {
-    width,
-    height,
-    x: Math.max(area.x, Math.min(valid ? point.x : area.x + area.width - width - 24, area.x + area.width - width)),
-    y: Math.max(area.y, Math.min(valid ? point.y - PET_LANE_HEIGHT : area.y + 40, area.y + area.height - height)),
-  };
+  if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) {
+    return widgetBoundsInWorkArea(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea);
+  }
+  const anchor = { x: Math.round(saved.x), y: Math.round(saved.y) };
+  // At a monitor boundary choose the display covering most of the window.
+  const display = screen.getDisplayMatching({
+    x: anchor.x, y: anchor.y - widgetLayout.laneHeight, width: widgetLayout.width, height: fullWidgetHeight,
+  });
+  return widgetBoundsInWorkArea(display.workArea, anchor);
 }
 
 // Persist the card's top-left corner, the same anchor used before the pet was added.
 function widgetCardPosition() {
-  const { x, y } = widgetWindow.getBounds();
-  return { x, y: y + PET_LANE_HEIGHT };
-}
-
-function stopWidgetPointerTracking() {
-  clearInterval(lanePointerTimer);
-  lanePointerTimer = undefined;
-  if (widgetPassesClicks && widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setIgnoreMouseEvents(false);
-  widgetPassesClicks = false;
+  const { x, y, height } = widgetWindow.getBounds();
+  return { x, y: y + petLaneHeight(height) };
 }
 
 function syncWidgetMouseRegion() {
   if (process.platform !== 'win32' && process.platform !== 'darwin') return;
   const cursor = screen.getCursorScreenPoint();
-  const { x, y, width } = widgetWindow.getBounds();
-  const overLane = cursor.x >= x && cursor.x < x + width && cursor.y >= y && cursor.y < y + PET_LANE_HEIGHT;
-  if (overLane !== widgetPassesClicks) {
-    widgetWindow.setIgnoreMouseEvents(overLane);
-    widgetPassesClicks = overLane;
-  }
-}
-
-function startWidgetPointerTracking() {
-  if (process.platform !== 'win32' && process.platform !== 'darwin') return;
-  syncWidgetMouseRegion();
-  // Native drag regions swallow DOM enter/leave events. Sample the OS cursor
-  // only while visible and change the native hit test only on a lane crossing.
-  lanePointerTimer ??= setInterval(syncWidgetMouseRegion, 24);
+  const { x, y, width, height } = widgetWindow.getBounds();
+  const overLane = cursor.x >= x && cursor.x < x + width && cursor.y >= y && cursor.y < y + petLaneHeight(height);
+  if (overLane) widgetWindow.setIgnoreMouseEvents(true, { forward: true });
+  else widgetWindow.setIgnoreMouseEvents(false);
 }
 
 function refitWidget() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   widgetWindow.setBounds(fitWidgetBounds(widgetCardPosition()));
-  if (widgetWindow.isVisible()) syncWidgetMouseRegion();
+  syncWidgetMouseRegion();
 }
 
 function saveWidgetPosition() {
@@ -238,6 +217,10 @@ async function createWidget() {
     ...fitWidgetBounds(desktopState.widgetPosition),
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
+    useContentSize: true,
+    roundedCorners: false,
+    ...(process.platform === 'win32' ? { thickFrame: false, backgroundMaterial: 'none' } : {}),
     show: false,
     resizable: false,
     maximizable: false,
@@ -264,8 +247,7 @@ async function createWidget() {
       hideWidget();
     }
   });
-  widgetWindow.on('hide', stopWidgetPointerTracking);
-  widgetWindow.on('closed', () => { widgetWindow = undefined; stopWidgetPointerTracking(); });
+  widgetWindow.on('closed', () => { widgetWindow = undefined; });
   const createdWindow = widgetWindow;
   try {
     await loadWindow(createdWindow, true);
@@ -299,7 +281,6 @@ async function showWidget(minimizeMain = true, mode = 'manual') {
     }
     refitWidget();
     widgetWindow.showInactive();
-    startWidgetPointerTracking();
     if (minimizeMain && mainWindow && !mainWindow.isMinimized()) mainWindow.minimize();
   } catch (error) {
     if (request !== widgetRequest || quitting) return;
@@ -440,6 +421,10 @@ function createTray() {
 }
 
 function installIPC() {
+  ipcMain.on('niuma:widget-pointer-crossed', event => {
+    if (widgetWindow?.isVisible() && event.sender.id === widgetWindow.webContents.id
+      && isTrustedIpc(event, ownedContents, isAllowedURL)) syncWidgetMouseRegion();
+  });
   const handle = (channel, callback) => ipcMain.handle(channel, (event, ...args) => {
     validateSender(event);
     return callback(...args);
@@ -486,7 +471,6 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true;
     clearTimeout(positionTimer);
-    stopWidgetPointerTracking();
     clearInterval(scheduleTimer);
     widgetRequest++;
     saveWidgetPosition();

@@ -3,11 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect } from '@playwright/test';
+import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
 const userData = path.join(process.env.NIUMA_SMOKE_DATA_ROOT || artifacts, `desktop-test-${Date.now()}`);
-const executablePath = process.env.NIUMA_SMOKE_EXECUTABLE;
+const executablePath = process.env.NIUMA_SMOKE_EXECUTABLE && path.resolve(process.env.NIUMA_SMOKE_EXECUTABLE);
+fs.mkdirSync(artifacts, { recursive: true });
 fs.mkdirSync(userData, { recursive: true });
 const environment = { ...process.env };
 delete environment.ELECTRON_RUN_AS_NODE;
@@ -37,8 +39,8 @@ try {
   main.on('pageerror', error => failures.push(error.message));
   await expect(main.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 20_000 });
   const paths = await desktop.evaluate(({ app }) => ({ userData: app.getPath('userData'), sessionData: app.getPath('sessionData') }));
-  assert.equal(path.resolve(paths.userData), userData);
-  assert.equal(path.resolve(paths.sessionData), userData);
+  assert.equal(fs.realpathSync.native(paths.userData), fs.realpathSync.native(userData));
+  assert.equal(fs.realpathSync.native(paths.sessionData), fs.realpathSync.native(userData));
   record('isolated userData/sessionData and native main window');
 
   await main.getByRole('button', { name: '设置我的日薪', exact: true }).click();
@@ -62,13 +64,14 @@ try {
   assert.equal((await main.evaluate(() => window.niuma.getState())).settings.dailySalary, 680);
   record('daily salary form saves through authorized IPC; invalid settings rejected');
 
+  const appRoot = await desktop.evaluate(({ app }) => app.getAppPath());
   const unauthorized = await desktop.evaluate(async ({ BrowserWindow }, preload) => {
     const rogue = new BrowserWindow({ show: false, webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     try {
       await rogue.loadURL('about:blank');
       return await rogue.webContents.executeJavaScript('window.niuma.setState({version:2,configured:false}).then(() => "accepted", error => error.message)');
     } finally { rogue.destroy(); }
-  }, path.join(root, 'electron', 'preload.cjs'));
+  }, path.join(appRoot, 'electron', 'preload.cjs'));
   assert.match(unauthorized, /\[WINDOW_NOT_TRUSTED\]/);
   record('unowned about:blank window cannot invoke protected state IPC');
   await main.screenshot({ path: path.join(artifacts, 'native-main.png'), fullPage: false });
@@ -79,17 +82,18 @@ try {
   widget.on('pageerror', error => failures.push(error.message));
   await expect(widget.getByLabel('工资悬浮窗')).toBeVisible({ timeout: 15_000 });
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(true);
+  await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.minimized).toBe(true);
   const initialWindows = await windows();
   const widgetState = initialWindows.find(window => window.url.endsWith('#/widget'));
   assert.equal(widgetState.alwaysOnTop, true);
-  assert.equal(widgetState.bounds.width, 350);
-  assert.equal(widgetState.bounds.height, 232);
+  assert.equal(widgetState.bounds.width, widgetLayout.width);
+  assert.equal(widgetState.bounds.height, widgetLayout.laneHeight + widgetLayout.cardHeight);
   const card = await widget.locator('.widget').boundingBox();
-  assert.equal(card.y, 72);
-  assert.equal(card.height, 160);
-  assert.equal(initialWindows.find(window => !window.url.endsWith('#/widget'))?.minimized, true);
+  assert.equal(card.y, widgetLayout.laneHeight);
+  assert.equal(card.width, widgetLayout.width);
+  assert.equal(card.height, widgetLayout.cardHeight);
   await widget.screenshot({ path: path.join(artifacts, 'native-widget.png'), fullPage: false });
-  record('manual floating widget is visible, always on top, with a 72 px pet lane and 350×160 card; main minimized');
+  record(`manual floating widget is visible, always on top, with a ${widgetLayout.laneHeight} px pet lane and ${card.width}×${card.height} card; main minimized`);
 
   await widget.getByRole('button', { name: '返回主窗口', exact: true }).click();
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
@@ -124,7 +128,7 @@ try {
   if (desktop) {
     const child = desktop.process();
     await desktop.close();
-    assert.ok(child.exitCode !== null || child.signalCode !== null, 'Electron process should exit after test cleanup');
+    await expect.poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 8_000 }).toBe(true);
     record('Electron process closed cleanly');
   }
   fs.writeFileSync(path.join(artifacts, 'native-smoke-result.json'), JSON.stringify({ status: failures.length ? 'failed' : 'passed', passed, errors: failures, userData }, null, 2));

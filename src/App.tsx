@@ -6,7 +6,7 @@ import { DEFAULT_STATE, readState, subscribeState, writeState, type AppState } f
 import SettingsModal from './components/SettingsModal';
 import LiveAmount from './components/LiveAmount';
 import Mascot from './components/Mascot';
-import Widget from './components/Widget';
+import Widget, { widgetLayoutStyle } from './components/Widget';
 import { classifyDay, dateKey, fetchCalendarYear } from '../shared/calendar.mjs';
 import { describeDesktopError, isDesktopHost } from './lib/desktop-error';
 import { version } from '../package.json';
@@ -228,7 +228,7 @@ function App() {
     {goalOpen && <GoalModal goal={state.goal} onSave={async goal => { await save({ ...state, goal }); setGoalOpen(false); setToast('新的小目标，安排好了。'); }} onClose={() => setGoalOpen(false)} />}
     {notice && <div className="toast" role={notice.error ? 'alert' : 'status'}>{notice.error ? <span aria-hidden="true">!</span> : <Check size={17} />}<span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="关闭提示"><X size={14} /></button></div>}
     {browserWidget && <div className="browser-widget-host"
-      style={{ '--widget-right': `${widgetPosition.x}px`, '--widget-bottom': `${widgetPosition.y}px` } as CSSProperties}
+      style={{ ...widgetLayoutStyle, '--widget-right': `${widgetPosition.x}px`, '--widget-bottom': `${widgetPosition.y}px` } as CSSProperties}
       onPointerDown={e => {
         if (e.button !== 0 || (e.target as Element).closest('button')) return;
         const bounds = e.currentTarget.getBoundingClientRect();

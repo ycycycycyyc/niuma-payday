@@ -78,7 +78,7 @@ test('quiet dog stays visible while the compact card can be dragged and restored
   await page.mouse.up();
   await expect.poll(() => lane.boundingBox()).toMatchObject({ x: 0, y: 0 });
   await page.setViewportSize({ width: 320, height: 560 });
-  expect(await card.boundingBox()).toMatchObject({ x: 0, width: 320, height: 160 });
+  expect(await card.boundingBox()).toMatchObject({ x: 0, width: 320, height: 200 });
   await card.getByRole('button', { name: '返回主窗口' }).click();
   await expect(card).toHaveCount(0);
 });
