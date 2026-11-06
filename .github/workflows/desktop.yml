@@ -97,7 +97,7 @@ jobs:
 
           cmp "$zip_app/Contents/_CodeSignature/CodeResources" "$dmg_app/Contents/_CodeSignature/CodeResources"
           cmp "$zip_app/Contents/Resources/app.asar" "$dmg_app/Contents/Resources/app.asar"
-          codesign -d --entitlements - "$zip_app" > "$work/entitlements.plist"
+          codesign -d --entitlements - --xml "$zip_app" > "$work/entitlements.plist"
           for entitlement in allow-jit disable-library-validation; do
             [[ "$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.cs.$entitlement" "$work/entitlements.plist")" == true ]]
           done
