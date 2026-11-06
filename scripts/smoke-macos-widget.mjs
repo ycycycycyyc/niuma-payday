@@ -59,6 +59,9 @@ export async function verifyMacWidget(desktop, widget, scratch, record) {
     await pointer('click', { x: win.x + 2, y: win.y + 6 });
     await expect.poll(async () => (await readReceiver()).clicks).toBe(1);
     const dog = button('和狗狗握手');
+    // AppKit can restore a previous keyboard focus when the panel activates.
+    // Start unfocused so this assertion measures what the system click adds.
+    await dog.evaluate(el => el.blur());
     await macClick(desktop, dog);
     await expect(dog).toHaveAttribute('data-pose', 'paw');
     const focus = await dog.evaluate(el => ({ outline: getComputedStyle(el).outlineStyle, keyboard: el.matches(':focus-visible') }));

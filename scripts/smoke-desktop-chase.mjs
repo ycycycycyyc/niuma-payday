@@ -27,7 +27,7 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
     const card = w.getContentBounds();
     return { card, area:screen.getDisplayMatching(card).workArea };
   });
-  const target = {
+  let target = {
     x: card.x + card.width / 2 > area.x + area.width / 2 ? area.x + 75 : area.x + area.width - 75,
     y: card.y + card.height / 2 > area.y + area.height / 2 ? area.y + 75 : area.y + area.height - 75,
   };
@@ -41,32 +41,84 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
   await expect.poll(() => widget.evaluate(async () => (await window.niuma.getDesktopPetState()).phase)).toBe('chasing');
   const overlay = desktop.windows().find(p => p.url().endsWith('/pet.html'));
   assert.ok(overlay, 'The desktop drawing surface is ready');
-  await move(target);
-  const cadence = await overlay.evaluate(() => new Promise(resolve => {
-    const dog = document.getElementById('desktop-dog');
-    const samples = [];
-    function measure(time) {
-      const rect = dog.getBoundingClientRect();
-      samples.push({ time, x: rect.x, y: rect.y });
-      if (time - samples[0].time < 480) { requestAnimationFrame(measure); return; }
-      const moving = samples.slice(1).filter((s, i) => Math.hypot(s.x - samples[i].x, s.y - samples[i].y) > 0.1);
-      const gaps = moving.slice(1).map((s, i) => s.time - moving[i].time).sort((a, b) => a - b);
-      resolve({ moving: moving.length, refreshes: samples.length - 1, median: gaps[Math.floor(gaps.length / 2)] });
+  const corners = [75, area.width - 75].flatMap(x => [75, area.height - 75].map(y => ({ x: area.x + x, y: area.y + y })))
+    .filter(p => p.x < card.x - 30 || p.x > card.x + card.width + 30 || p.y < card.y - 30 || p.y > card.y + card.height + 30);
+  const attempts = [];
+  const deadline = Date.now() + 10_000;
+  let cadence;
+  for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt++) {
+    if (attempt) {
+      const current = await paintedPet(desktop);
+      assert.ok(current, 'The dog remains visible before restarting a continuous walking sample');
+      target = [...corners].sort((a, b) => Math.hypot(b.x - current.x, b.y - current.y) - Math.hypot(a.x - current.x, a.y - current.y))[0];
+      assert.ok(target, 'A distant pointer target exists outside the card');
     }
-    requestAnimationFrame(measure);
-  }));
-  assert.ok(cadence.moving >= 3 && cadence.moving >= cadence.refreshes * 0.75, JSON.stringify(cadence));
-  record(`the desktop dog advanced on ${cadence.moving}/${cadence.refreshes} display refreshes, median interval ${cadence.median.toFixed(1)} ms`);
+    await move(target);
+    cadence = await overlay.evaluate(timeout => new Promise(resolve => {
+      const dog = document.getElementById('desktop-dog');
+      const bone = document.getElementById('desktop-bone');
+      const menu = document.querySelector('.pet-food-menu');
+      const visible = element => Boolean(element && !element.hidden && element.getClientRects().length);
+      const requestedAt = performance.now();
+      const samples = [];
+      let previous;
+      let consecutiveMoves = 0;
+      let startup;
+      let raf;
+      let finished = false;
+      const finish = (complete, reason) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        cancelAnimationFrame(raf);
+        const moving = samples.slice(1).filter((s, i) => Math.hypot(s.x - samples[i].x, s.y - samples[i].y) > 0.1);
+        const gaps = moving.slice(1).map((s, i) => s.time - moving[i].time).sort((a, b) => a - b);
+        resolve({ complete, reason, startup, elapsed: performance.now() - requestedAt,
+          moving: moving.length, refreshes: Math.max(0, samples.length - 1), median: gaps[Math.floor(gaps.length / 2)] });
+      };
+      const timer = setTimeout(() => finish(false, 'walking sample timed out'), timeout);
+      function measure(time) {
+        const rect = dog.getBoundingClientRect();
+        const sample = { time, x: rect.x, y: rect.y };
+        const walking = visible(dog) && visible(bone) && !visible(menu) && dog.dataset.feeding !== 'true' && dog.dataset.pose === 'walk';
+        if (!walking) {
+          // Hovering her now opens a food menu and intentionally pauses pursuit.
+          // A pause or arrival ends this sample; try a farther pointer target.
+          if (samples.length) { finish(false, 'walking ended at a menu or arrival'); return; }
+          consecutiveMoves = 0;
+        } else if (!samples.length) {
+          consecutiveMoves = previous && Math.hypot(sample.x - previous.x, sample.y - previous.y) > 0.1 ? consecutiveMoves + 1 : 0;
+          if (consecutiveMoves >= 2) { startup = performance.now() - requestedAt; samples.push(sample); }
+        } else samples.push(sample);
+        previous = sample;
+        if (samples.length && time - samples[0].time >= 480) { finish(true, 'continuous walking'); return; }
+        raf = requestAnimationFrame(measure);
+      }
+      raf = requestAnimationFrame(measure);
+    }), Math.min(2_500, Math.max(1, deadline - Date.now())));
+    attempts.push(cadence);
+    if (cadence.complete) break;
+  }
+  assert.ok(cadence?.complete, `No complete continuous walking sample: ${JSON.stringify(attempts)}`);
+  assert.ok(cadence.moving >= 3 && cadence.moving >= cadence.refreshes * 0.75, JSON.stringify({ cadence, attempts }));
+  record(`after ${cadence.startup.toFixed(1)} ms startup, the desktop dog advanced on ${cadence.moving}/${cadence.refreshes} walking display refreshes, median interval ${cadence.median.toFixed(1)} ms (${attempts.length} sample attempts)`);
   await expect.poll(async () => {
     const pet = await paintedPet(desktop);
-    return pet?.top && pet.bone && Math.hypot(pet.x - target.x, pet.y - target.y) < 100;
+    // The visible bone was checked during cadence. At the destination the new
+    // feeding menu may legitimately replace it and pause the dog.
+    return pet?.top && Math.hypot(pet.x - target.x, pet.y - target.y) < 100;
   }, { timeout:12000 }).toBe(true);
   const outdoors = await paintedPet(desktop);
   if (verifyOrder) await verifyOrder(outdoors);
   assert.ok(outdoors.x < card.x || outdoors.x > card.x + card.width || outdoors.y < card.y || outdoors.y > card.y + card.height);
   await expect(widget.locator('.widget-dog')).toBeHidden();
-  await clickThrough({ x:Math.round(outdoors.x), y:Math.round(outdoors.y) });
-  record('the dog follows the system pointer beyond the lowered card on a topmost layer and a click on her reaches the other app');
+  const emptyPoint = [-220, 0, 220].flatMap(dx => [-220, 0, 220].map(dy => ({ x: Math.round(outdoors.x + dx), y: Math.round(outdoors.y + dy) })))
+    .filter(p => p.x >= area.x + 20 && p.x < area.x + area.width - 20 && p.y >= area.y + 20 && p.y < area.y + area.height - 20)
+    .filter(p => Math.hypot(p.x - outdoors.x, p.y - outdoors.y) >= 200)
+    .find(p => p.x < card.x - 20 || p.x > card.x + card.width + 20 || p.y < card.y - 20 || p.y > card.y + card.height + 20);
+  assert.ok(emptyPoint, 'A transparent point outside the card, dog and food menu exists');
+  await clickThrough(emptyPoint);
+  record('the dog follows the system pointer beyond the lowered card on a topmost layer; a real click in nearby transparent space outside the dog, food menu and card reaches the other app');
 
   await stop();
   await expect.poll(() => widget.evaluate(() => window.__chasePhases.includes('returning'))).toBe(true);
