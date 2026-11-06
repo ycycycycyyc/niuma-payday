@@ -1,10 +1,10 @@
 import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, Eye, EyeOff, GripHorizontal, X } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import layout from '../../shared/widget-layout.json';
 import lensMap from '../assets/widget-lens-displacement.png?inline';
 import { DEFAULT_SETTINGS, calculateSalary } from '../lib/salary';
 import { duration, useClock } from '../lib/clock';
-import type { AppState, WidgetLayer } from '../lib/store';
+import type { AppState, DesktopPetState, WidgetLayer } from '../lib/store';
 import LiveAmount from './LiveAmount';
 import Mascot from './Mascot';
 import WidgetPet from './WidgetPet';
@@ -22,6 +22,69 @@ export const widgetLayoutStyle = {
 const hasLensFilter = typeof window !== 'undefined' && (Boolean(window.niuma) || 'chrome' in window || /\bElectron\//.test(navigator.userAgent)) &&
   CSS.supports('backdrop-filter', 'url("#glass")');
 
+function useBoneMode(api: Window['niuma']) {
+  const native = Boolean(api?.setDesktopPetMode && (api.platform === 'darwin' || api.platform === 'win32'));
+  const [chasing, setChasing] = useState(false);
+  const [state, setState] = useState<DesktopPetState>({ phase: 'docked' });
+  const [error, setError] = useState(false);
+  const revision = useRef(0);
+  const lastPhase = useRef<DesktopPetState['phase']>('docked');
+  const apply = useCallback((value: DesktopPetState) => {
+    lastPhase.current = value.phase;
+    setState(value);
+    setChasing(value.phase === 'chasing');
+    setError(false);
+  }, []);
+
+  useEffect(() => {
+    if (!native || !api) return;
+    const current = revision.current;
+    const off = api.onDesktopPetState?.(value => {
+      revision.current++;
+      apply(value);
+    });
+    void api.getDesktopPetState?.().then(value => {
+      if (current === revision.current) apply(value);
+    }).catch(() => {
+      if (current === revision.current) setError(true);
+    });
+    return () => { revision.current++; off?.(); };
+  }, [native, api, apply]);
+
+  const change = useCallback((active: boolean) => {
+    setChasing(active);
+    if (!native || !api?.setDesktopPetMode) return;
+    const current = ++revision.current;
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    void api.setDesktopPetMode({ active, reducedMotion }).then(value => {
+      if (current === revision.current) apply(value);
+    }).catch(() => {
+      if (current === revision.current) {
+        setChasing(lastPhase.current === 'chasing');
+        setError(true);
+      }
+    });
+  }, [native, api, apply]);
+
+  useEffect(() => {
+    if (!native || state.phase === 'docked') return;
+    const preference = matchMedia('(prefers-reduced-motion: reduce)');
+    const updateMotion = () => change(state.phase === 'chasing');
+    preference.addEventListener('change', updateMotion);
+    return () => preference.removeEventListener('change', updateMotion);
+  }, [native, state.phase, change]);
+
+  useEffect(() => {
+    if (!chasing) return;
+    const putAway = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); change(false); }
+    };
+    document.addEventListener('keydown', putAway);
+    return () => document.removeEventListener('keydown', putAway);
+  }, [chasing, change]);
+  return { native, chasing, state, change, error };
+}
+
 function LensFilter({ id }: { id: string }) {
   return <svg className="widget-lens-defs" width="0" height="0" aria-hidden="true" focusable="false">
     <defs><filter id={id} x="0%" y="0%" width="100%" height="100%" colorInterpolationFilters="sRGB">
@@ -33,9 +96,9 @@ function LensFilter({ id }: { id: string }) {
 }
 
 export default function Widget({ state, onTogglePrivacy, onRestore, onHide, preview = false }: { state: AppState; onTogglePrivacy: () => Promise<void>; onRestore: () => void; onHide: () => void; preview?: boolean }) {
-  const [chasing, setChasing] = useState(false);
   const boneButton = useRef<HTMLButtonElement>(null);
   const desktop = preview ? undefined : window.niuma;
+  const bone = useBoneMode(desktop);
   const [privacySave, setPrivacySave] = useState<'idle' | 'saving' | 'failed'>('idle');
   const privacyLabel = state.privacy ? '显示金额' : '隐藏金额';
   const [layer, setLayer] = useState<WidgetLayer | null>(null);
@@ -100,12 +163,13 @@ export default function Widget({ state, onTogglePrivacy, onRestore, onHide, prev
   const lensStyle = { '--widget-lens-filter': `url("#${lensId}") saturate(1.06)` } as CSSProperties;
 
   return <div className="widget-stack" style={widgetLayoutStyle}>
-    <WidgetPet chasing={chasing} setChasing={setChasing} boneButton={boneButton} preview={preview} />
+    <WidgetPet chasing={!bone.native && bone.chasing} setChasing={bone.change}
+      desktopState={bone.state} boneButton={boneButton} preview={preview} />
     {hasLensFilter && <LensFilter id={lensId} />}
     <section className={`widget ${preview ? 'widget-preview' : ''}`} data-refraction={hasLensFilter ? 'svg' : 'fallback'} style={lensStyle} aria-label="工资悬浮窗">
       <div className="widget-head">
         <div className="widget-head-move">
-          {layerError ? <span className="widget-status" role="status">层级操作失败，可重试</span> :
+          {bone.error || layerError ? <span className="widget-status" role="status">{bone.error ? '骨头操作失败，可重试' : '层级操作失败，可重试'}</span> :
             <span className="widget-status"><i className={result.status === 'working' ? 'active' : ''} />{demo ? '演示数据' : result.statusLabel}</span>}
           <GripHorizontal size={18} className="widget-grip" aria-hidden="true" />
         </div>
@@ -114,9 +178,9 @@ export default function Widget({ state, onTogglePrivacy, onRestore, onHide, prev
             disabled={privacySave === 'saving'} onClick={changePrivacy}>
             {state.privacy ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
           </button>
-          <button ref={boneButton} type="button" className="widget-bone-toggle" aria-pressed={chasing}
-            aria-label={chasing ? '收起骨头' : '拿起骨头'} title={chasing ? '收起骨头（Esc）' : '拿起骨头，让她追着玩'}
-            onClick={() => setChasing(held => !held)}><Bone size={17} aria-hidden="true" /></button>
+          <button ref={boneButton} type="button" className="widget-bone-toggle" aria-pressed={bone.chasing}
+            aria-label={bone.chasing ? '收起骨头' : '拿起骨头'} title={bone.chasing ? '收起骨头（Esc）' : '拿起骨头，让她追着玩'}
+            onClick={() => bone.change(!bone.chasing)}><Bone size={17} aria-hidden="true" /></button>
           {desktop?.setWidgetLayer && desktop.getWidgetLayer && <button type="button"
             disabled={changingLayer || (layer === null && !layerError)} aria-label={layerLabel} title={layerLabel}
             onClick={() => void changeLayer()}>

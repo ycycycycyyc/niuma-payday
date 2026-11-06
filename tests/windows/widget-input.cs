@@ -86,7 +86,7 @@ class WidgetInput {
             base.WndProc(ref message);
         }
     }
-    static void TrayClick(uint pid, IntPtr receiver) {
+    static void TrayClick(uint pid, IntPtr receiver, bool putBoneAway) {
         IntPtr host = WindowsOf(pid).Find(w => ClassOf(w) == "Electron_NotifyIconHostWindow");
         if (host == IntPtr.Zero) throw new InvalidOperationException("Electron tray host HWND missing for pid " + pid);
         // Electron 45.2.3 notify_icon_host.{cc,h}: kBaseIconId=2 plus the first
@@ -113,7 +113,7 @@ class WidgetInput {
             if (!PostMessage(host, 0x8001, new IntPtr(id.id), new IntPtr(0x0204)))
                 throw new InvalidOperationException("Could not send the shell's right-button notification to " + host);
         }
-        string label = "\u5c06\u6d6e\u7a97\u7f6e\u9876";
+        string label = putBoneAway ? "\u6536\u8d77\u9aa8\u5934" : "\u5c06\u6d6e\u7a97\u7f6e\u9876";
         var itemCondition = new AndCondition(
             new PropertyCondition(AutomationElement.NameProperty, label),
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem));
@@ -145,7 +145,7 @@ class WidgetInput {
                         hit = TreeWalker.ControlViewWalker.GetParent(hit);
                     if (hit == null || hit.Current.Name != label) continue;
                     Send(Button(2), Button(4));
-                    Console.WriteLine(route + "; real click on the UI Automation-identified pin menu item");
+                    Console.WriteLine(route + "; real click on the requested native menu item");
                     return;
                 } catch (ElementNotAvailableException) { /* Menu opening or closing between queries. */ }
             }
@@ -165,7 +165,7 @@ class WidgetInput {
         if (SetThreadDpiAwarenessContext(new IntPtr(-4)) == IntPtr.Zero)
             throw new InvalidOperationException("Could not enter the per-monitor DPI context.");
         string action = args[0];
-        if (action == "tray") { TrayClick(uint.Parse(args[1]), new IntPtr(long.Parse(args[2]))); return; }
+        if (action == "tray") { TrayClick(uint.Parse(args[1]), new IntPtr(long.Parse(args[2])), args.Length > 3 && args[3] == "stop"); return; }
         if (action == "show-cover" || action == "hide-cover") {
             var hwnd = new IntPtr(long.Parse(args[1]));
             if (ProcessOf(hwnd) != uint.Parse(args[2])) throw new InvalidOperationException("Wrong cover process");

@@ -136,19 +136,13 @@ async function verifyDesktop() {
         const { x, y } = win.getBounds();
         screen.getCursorScreenPoint = () => ({ x: x + 147, y: y + 112 });
       });
-      const [point] = await Promise.all([
-        widget.evaluate(() => new Promise((resolve, reject) => {
-          const off = window.niuma.onWidgetPointer(value => { clearTimeout(timer); off(); resolve(value); });
-          const timer = setTimeout(() => { off(); reject(new Error('No initial native pet pointer received')); }, 4000);
-        })),
-        widget.getByRole('button', { name: '拿起骨头', exact: true }).click(),
-      ]);
-      assert.deepEqual(point, { x: 147, y: 112 });
-      await expect(widget.locator('.pet-held-bone')).toBeVisible();
+      await widget.getByRole('button', { name: '拿起骨头', exact: true }).click();
+      await expect.poll(() => widget.evaluate(async () => (await window.niuma.getDesktopPetState()).phase)).toBe('chasing');
+      await expect(widget.locator('.widget-dog')).toBeHidden();
       await widget.keyboard.press('Escape');
-      await expect(widget.getByRole('button', { name: '拿起骨头', exact: true })).toHaveAttribute('aria-pressed', 'false');
-      await expect(widget.locator('.pet-held-bone')).toBeHidden();
-      record('native widget receives the first local cursor coordinate for the bone and puts it away on Escape');
+      await expect.poll(() => widget.evaluate(async () => (await window.niuma.getDesktopPetState()).phase), { timeout: 8000 }).toBe('docked');
+      await expect(widget.locator('.widget-dog')).toBeVisible();
+      record('desktop chase activates and Escape returns the dog to its card using a local cursor fixture');
     } finally {
       await desktop.evaluate(({ screen }, original) => { screen.getCursorScreenPoint = original; }, originalCursor);
       await originalCursor.dispose();

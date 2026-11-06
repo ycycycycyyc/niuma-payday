@@ -8,6 +8,7 @@ import { createEntryPolicy, isTrustedIpc } from '../shared/ipc-origin.mjs';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 import { fullWidgetHeight, petLaneHeight, widgetBoundsInWorkArea } from '../shared/widget-geometry.mjs';
 import { setWindowsWidgetLayer } from './windows-widget-layer.mjs';
+import { DesktopPet } from './desktop-pet.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const developmentURL = process.env.VITE_DEV_SERVER_URL;
@@ -27,6 +28,7 @@ if (app.commandLine.hasSwitch('user-data-dir')) {
 let mainWindow;
 let widgetWindow;
 let tray;
+let trayMenuUpdate;
 let quitting = false;
 let appState = null;
 let desktopState = {};
@@ -46,6 +48,16 @@ let calendarStatus = { status: 'idle', message: '节假日日历尚未更新', c
 const appIcon = path.join(root, 'build', 'icon.png');
 const statePath = () => path.join(app.getPath('userData'), 'state.json');
 const desktopPath = () => path.join(app.getPath('userData'), 'desktop.json');
+const desktopPet = new DesktopPet({
+  root, developmentURL, getWidget: () => widgetWindow, getHit: () => widgetPet,
+  notify(state) {
+    if (widgetWindow && !widgetWindow.isDestroyed() && !widgetWindow.webContents.isDestroyed()) {
+      widgetWindow.webContents.send('niuma:desktop-pet-state', state);
+    }
+    // Let a native menu finish dispatching its current command before replacing it.
+    trayMenuUpdate ??= setImmediate(() => { trayMenuUpdate = undefined; refreshTrayMenu(); });
+  },
+});
 
 function readJSON(filename, fallback) {
   try {
@@ -200,6 +212,7 @@ function widgetCardPosition() {
 function stopWidgetPointerTracking() {
   clearInterval(lanePointerTimer);
   lanePointerTimer = undefined;
+  desktopPet.end();
   lastPetPointer = null;
   if (widgetPet) widgetPet.chasing = false;
   if (widgetPassesClicks && widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setIgnoreMouseEvents(false);
@@ -220,18 +233,20 @@ function hitsWidgetPet(x, y) {
 function syncWidgetMouseRegion() {
   if (process.platform !== 'win32' && process.platform !== 'darwin') return;
   const cursor = screen.getCursorScreenPoint();
+  desktopPet.tick(cursor);
   const { x, y, width, height } = widgetWindow.getBounds();
   // Electron screen and window geometry are DIP; renderer rectangles are CSS pixels.
   const zoom = widgetWindow.webContents.getZoomFactor();
   const localX = (cursor.x - x) / zoom;
   const localY = (cursor.y - y) / zoom;
   const overLane = localX >= 0 && localX < width / zoom && localY >= 0 && localY < petLaneHeight(height / zoom);
-  const passClicks = overLane && !hitsWidgetPet(localX, localY);
+  const roaming = desktopPet.state.phase !== 'docked';
+  const passClicks = overLane && (roaming || !hitsWidgetPet(localX, localY));
   if (passClicks !== widgetPassesClicks) {
     widgetWindow.setIgnoreMouseEvents(passClicks);
     widgetPassesClicks = passClicks;
   }
-  if (widgetPet?.chasing && (localX !== lastPetPointer?.x || localY !== lastPetPointer?.y)) {
+  if (!roaming && widgetPet?.chasing && (localX !== lastPetPointer?.x || localY !== lastPetPointer?.y)) {
     lastPetPointer = { x: localX, y: localY };
     widgetWindow.webContents.send('niuma:widget-pointer', lastPetPointer);
   }
@@ -334,7 +349,7 @@ async function createWidget() {
     }
   });
   widgetWindow.on('hide', stopWidgetPointerTracking);
-  widgetWindow.webContents.on('did-start-loading', () => { widgetPet = null; lastPetPointer = null; });
+  widgetWindow.webContents.on('did-start-loading', () => { desktopPet.end(); widgetPet = null; lastPetPointer = null; });
   widgetWindow.on('closed', () => { widgetWindow = undefined; widgetPet = null; stopWidgetPointerTracking(); });
   const createdWindow = widgetWindow;
   try {
@@ -486,6 +501,22 @@ function notifyWindowState() {
   mainWindow?.webContents.send('niuma:window-state', { maximized: mainWindow.isMaximized() });
 }
 
+function refreshTrayMenu() {
+  if (!tray || quitting) return;
+  const recall = desktopPet.state.phase === 'chasing' ? [{
+    label: '收起骨头', click: () => { void desktopPet.setMode(false); },
+  }] : [];
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '打开牛马鼓励器', click: restoreMain },
+    { label: '显示工资浮窗', click: () => { void showWidget().catch(() => {}); } },
+    { label: '将浮窗置顶', click: bringWidgetToTop },
+    ...recall,
+    { label: '隐藏工资浮窗', click: () => hideWidget() },
+    { type: 'separator' },
+    { label: '退出', click: () => app.quit() },
+  ]));
+}
+
 function createTray() {
   try {
     const iconPath = path.join(root, 'build', process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png');
@@ -494,14 +525,7 @@ function createTray() {
     if (process.platform === 'darwin') icon.setTemplateImage(true);
     tray = new Tray(icon);
     tray.setToolTip('薪动 · 每一秒，都算数');
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开牛马鼓励器', click: restoreMain },
-      { label: '显示工资浮窗', click: () => { void showWidget().catch(() => {}); } },
-      { label: '将浮窗置顶', click: bringWidgetToTop },
-      { label: '隐藏工资浮窗', click: () => hideWidget() },
-      { type: 'separator' },
-      { label: '退出', click: () => app.quit() },
-    ]));
+    refreshTrayMenu();
     // On macOS a status item emits click before it opens its menu.
     if (process.platform !== 'darwin') {
       tray.on('click', restoreMain);
@@ -532,7 +556,7 @@ function installIPC() {
       || width > widgetLayout.width || height > fullWidgetHeight) return;
     const chasing = state.chasing && widgetWindow.isVisible();
     const startedChasing = chasing && !widgetPet?.chasing;
-    widgetPet = { left, top, width, height, chasing };
+    widgetPet = { left, top, width, height, chasing, facing: state.facing === -1 ? -1 : 1 };
     if (startedChasing) {
       lastPetPointer = null;
       syncWidgetMouseRegion();
@@ -542,6 +566,18 @@ function installIPC() {
     validateSender(event);
     return callback(...args);
   });
+  const widgetOnly = callback => (event, ...args) => {
+    validateSender(event);
+    if (event.sender?.id !== widgetWindow?.webContents.id) throw new Error('[WINDOW_NOT_TRUSTED] 此操作仅限工资浮窗。');
+    return callback(...args);
+  };
+  ipcMain.handle('niuma:get-desktop-pet-state', widgetOnly(() => desktopPet.state));
+  ipcMain.handle('niuma:desktop-pet-mode', widgetOnly(value => {
+    if (!isRecord(value) || typeof value.active !== 'boolean' || typeof value.reducedMotion !== 'boolean') {
+      throw new Error('无效的骨头开关。');
+    }
+    return desktopPet.setMode(value.active, value.reducedMotion);
+  }));
   handle('niuma:get-state', () => appState);
   handle('niuma:set-privacy', hidden => {
     if (typeof hidden !== 'boolean') throw new Error('[SETTINGS_INVALID] 金额显隐设置无效。');
@@ -584,6 +620,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => { if (app.isReady()) restoreMain(); });
   app.on('before-quit', () => {
     quitting = true;
+    clearImmediate(trayMenuUpdate);
     clearTimeout(positionTimer);
     stopWidgetPointerTracking();
     clearInterval(scheduleTimer);
@@ -617,8 +654,13 @@ if (!app.requestSingleInstanceLock()) {
     scheduleTimer = setInterval(backgroundTick, 15_000);
     powerMonitor.on('resume', backgroundTick);
     powerMonitor.on('unlock-screen', backgroundTick);
+    powerMonitor.on('lock-screen', () => desktopPet.end());
+    powerMonitor.on('suspend', () => desktopPet.end());
     void refreshCalendar().catch(error => console.warn('Unable to load holiday calendar:', error.message));
     screen.on('display-removed', refitWidget);
     screen.on('display-metrics-changed', refitWidget);
+    for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) {
+      screen.on(event, () => desktopPet.displaysChanged());
+    }
   });
 }

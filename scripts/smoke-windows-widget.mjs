@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { expect } from '@playwright/test';
+import { verifyDesktopChase } from './smoke-desktop-chase.mjs';
 
 const run = promisify(execFile);
 const source = fileURLToPath(new URL('../tests/windows/widget-input.cs', import.meta.url));
@@ -78,8 +79,9 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
     BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('#/widget')).setPosition(x, y);
   }, exposed);
   const origin = await nativePoint(desktop, { x: 0, y: 0 });
-  const end = await nativePoint(desktop, { x: state.width, y: state.height });
-  const cover = spawn(tool, ['cover', origin.x - 20, origin.y - 20, end.x - origin.x + 40, end.y - origin.y + 40].map(String), { windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] });
+  const { x, y, width, height } = await desktop.evaluate(({ screen }) =>
+    screen.dipToScreenRect(null, screen.getPrimaryDisplay().workArea));
+  const cover = spawn(tool, ['cover', x, y, width, height].map(String), { windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] });
   let receiver = 0;
   let clicks = 0;
   const reports = createInterface({ input: cover.stdout });
@@ -133,7 +135,22 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
       assert.deepEqual(await dog.evaluate(el => [getComputedStyle(el).outlineStyle, el.matches(':focus-visible')]), ['none', false]);
     });
     await widget.emulateMedia({ reducedMotion: 'no-preference' });
-    await check('real bone button picks up the bone, follows both screen positions and puts it away', async () => {
+    if (!baseline) {
+      const physical = point => desktop.evaluate(({ screen }, p) => screen.dipToScreenPoint(p), point);
+      await verifyDesktopChase(desktop, widget, {
+        click, move:async p => invoke('move', await physical(p)),
+        clickThrough:async p => {
+          const before = clicks;
+          await invoke('click', await physical(p), receiver);
+          await expect.poll(() => clicks).toBe(before + 1);
+        },
+        stop:async () => {
+          const pid = await desktop.evaluate(({ app }) => { app.setAccessibilitySupportEnabled(true); return process.pid; });
+          await run(tool, ['tray', String(pid), String(receiver), 'stop'], { windowsHide:true, timeout:25000 });
+        },
+        raise:() => widget.evaluate(() => window.niuma.setWidgetLayer('top')), record,
+      });
+    } else await check('real bone button picks up the bone, follows both screen positions and puts it away', async () => {
       await click(button('拿起骨头'));
       await expect(button('收起骨头')).toHaveAttribute('aria-pressed', 'true');
       await expect(widget.locator('.pet-held-bone')).toBeVisible();
@@ -149,7 +166,7 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
       await expect(button('拿起骨头')).toHaveAttribute('aria-pressed', 'false');
     });
 
-    const main = desktop.windows().find(page => !page.url().includes('#/widget'));
+    const main = desktop.windows().find(page => page.url().includes('index.html') && !page.url().includes('#/widget'));
     await check('real return button restores the main window', async () => {
       await click(button('返回主窗口'));
       await expect.poll(async () => (await windowState()).mainRestored).toBe(true);
@@ -165,8 +182,9 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
       const overlap = await nativePoint(desktop, await center(widget.locator('.widget-middle')));
       await click(button('将浮窗置底'));
       await expect.poll(() => invoke('hit', overlap)).toBe(String(receiver));
+      const beforeClick = clicks;
       await invoke('click', overlap, receiver);
-      await expect.poll(() => clicks).toBe(3);
+      await expect.poll(() => clicks).toBe(beforeClick + 1);
       record('a normal application immediately covers the lowered widget and receives the system click');
       let trayError;
       try {
