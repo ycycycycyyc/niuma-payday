@@ -38,9 +38,12 @@
 .companion-pet-dog:focus { outline: none; }
 .companion-pet-dog:focus-visible { outline: 2px solid #785d62; outline-offset: 1px; }
 .companion-pet-sprite {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
   background: no-repeat 0 center / 700% 100%;
+  transform-origin: 50% 50%;
   pointer-events: none;
 }

@@ -1,21 +1,10 @@
 import { useLayoutEffect, useRef, type KeyboardEvent } from 'react';
-import { createCompanionMotion, stepCompanionMotion, type CompanionMotionState } from '../../shared/desktop-pet-companion.mjs';
-import actions from '../assets/widget-dog-actions.webp';
-import walk from '../assets/widget-dog-walk.webp';
-import companion from '../assets/widget-dog-companion.png';
-import sleeping from '../assets/widget-dog-sleep.png';
-import playing from '../assets/widget-dog-play.png';
+import { createCompanionMotion, stepCompanionMotion } from '../../shared/desktop-pet-companion.mjs';
+import { applyPetSprite, loadPetSpriteArtwork } from '../lib/pet-sprite';
 import './companion-pet.css';
 
 export type CompanionOrigin = {
   x: number; y: number; size?: number; facing?: 1 | -1; pose?: string; frame?: number; stepPhase?: number;
-};
-
-const sleepRows: Partial<Record<CompanionMotionState['pose'], number>> = { sleep: 0, 'sleep-side': 1, 'sleep-belly': 2 };
-const sheets = {
-  walk: { image: walk, columns: 4, rows: 1 }, actions: { image: actions, columns: 7, rows: 1 },
-  companion: { image: companion, columns: 4, rows: 4 }, sleep: { image: sleeping, columns: 6, rows: 3 },
-  play: { image: playing, columns: 4, rows: 3 },
 };
 
 export default function CompanionPet({ origin, onRestore }: { origin: CompanionOrigin; onRestore: () => void }) {
@@ -39,13 +28,9 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
     let decoded = false;
     let disposed = false;
 
-    void Promise.all([walk, actions, companion, sleeping, playing].map(source => {
-      const image = new Image();
-      image.src = source;
-      return image.decode();
-    })).then(() => {
+    void loadPetSpriteArtwork().then(ready => {
       if (disposed) return;
-      decoded = true;
+      decoded = ready;
       measure();
     }).catch(() => {
       // The live app ships these local images together. A partial web export
@@ -54,24 +39,13 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
     });
 
     function paint() {
-      const sleepRow = sleepRows[pet.pose];
-      const sheet = sleepRow !== undefined ? 'sleep' : pet.pose === 'play' ? 'play'
-        : pet.pose === 'lick' || pet.pose === 'roll' ? 'companion' : pet.pose === 'walk' ? 'walk' : 'actions';
-      const { image, columns, rows } = sheets[sheet];
-      const column = sheet === 'play' ? pet.frame % 4 : pet.frame;
-      const row = sheet === 'play' ? Math.floor(pet.frame / 4) : sleepRow ?? (pet.pose === 'roll' ? 3 : 0);
-      if (sprite.dataset.sheet !== sheet) {
-        sprite.dataset.sheet = sheet;
-        sprite.style.backgroundImage = `url("${image}")`;
-        sprite.style.backgroundSize = `${columns * 100}% ${rows * 100}%`;
-      }
-      sprite.style.backgroundPosition = `${100 * column / (columns - 1)}% ${rows === 1 ? 50 : 100 * row / (rows - 1)}%`;
-      sprite.style.transform = `scaleX(${pet.facing})`;
+      const description = applyPetSprite(sprite, { ...pet, size, grounded: true });
       dog.style.width = dog.style.height = `${size}px`;
       dog.style.transform = `translate3d(${pet.x - size / 2}px, ${pet.y - size / 2}px, 0)`;
       dog.dataset.pose = pet.pose;
       dog.dataset.frame = String(pet.frame);
       dog.dataset.facing = String(pet.facing);
+      dog.dataset.sheet = description.sheet;
       dog.dataset.reducedMotion = String(quiet.matches);
       dog.hidden = !decoded;
     }

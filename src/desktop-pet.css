@@ -18,29 +18,24 @@ html, body {
   pointer-events: none;
   touch-action: manipulation;
   will-change: transform;
-  background: url('./assets/widget-dog-actions.webp') no-repeat 0 center / 700% 100%;
+  background: transparent;
 }
 #desktop-dog[data-interactive="true"] { pointer-events: auto; cursor: pointer; }
 #desktop-dog[data-feedable="true"] { pointer-events: auto; cursor: pointer; }
 #desktop-dog:focus { outline: none; }
 #desktop-dog:focus-visible { outline: 2px solid #785d62; outline-offset: 1px; }
-#desktop-dog[data-pose="walk"] {
-  background-image: url('./assets/widget-dog-walk.webp');
-  background-size: 400% 100%;
-}
-#desktop-dog[data-sheet="companion"] {
-  background-image: url('./assets/widget-dog-companion.png');
-  background-size: 400% 400%;
-}
-#desktop-dog[data-sheet="sleep"] {
-  background-image: url('./assets/widget-dog-sleep.png');
-  background-size: 600% 300%;
-}
-#desktop-dog[data-sheet="play"] {
-  background-image: url('./assets/widget-dog-play.png');
-  background-size: 400% 300%;
+#desktop-dog-sprite {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: no-repeat 0 center / 700% 100%;
+  transform-origin: 50% 50%;
+  pointer-events: none;
 }
 #desktop-dog[data-feeding="true"] { background-image: none; }
+#desktop-dog[data-feeding="true"] #desktop-dog-sprite { visibility: hidden; }
 #desktop-bone {
   display: grid;
   width: 28px;

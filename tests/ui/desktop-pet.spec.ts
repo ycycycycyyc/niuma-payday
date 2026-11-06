@@ -171,7 +171,7 @@ test('only the companion dog accepts double-clicks and keyboard restoration', as
   await expect(page.locator('body')).toHaveAttribute('data-restores', '3');
 });
 
-test('companion actions use the licking, rolling, three sleeping poses and twelve play frames', async ({ page }) => {
+test('companion artwork includes sleeping poses, all play frames and six transition rows', async ({ page }) => {
   await page.addInitScript(() => {
     window.petOverlay = {
       onFrame(listener) {
@@ -183,6 +183,7 @@ test('companion actions use the licking, rolling, three sleeping poses and twelv
   });
   await page.goto('/pet.html');
   const dog = page.locator('#desktop-dog');
+  const sprite = page.locator('#desktop-dog-sprite');
   const cases = [
     { pose: 'lick', frame: 2, sheet: 'companion', size: '400% 400%', x: 200 / 3, y: 0, asset: 'widget-dog-companion' },
     { pose: 'roll', frame: 2, sheet: 'companion', size: '400% 400%', x: 200 / 3, y: 100, asset: 'widget-dog-companion' },
@@ -192,6 +193,8 @@ test('companion actions use the licking, rolling, three sleeping poses and twelv
     ...Array.from({ length: 12 }, (_, frame) => ({
       pose: 'play', frame, sheet: 'play', size: '400% 300%', x: frame % 4 * 100 / 3, y: Math.floor(frame / 4) * 50, asset: 'widget-dog-play',
     })),
+    ...['bridge-lick', 'bridge-sleep', 'bridge-side', 'bridge-belly', 'bridge-play', 'bridge-turn'].flatMap((pose, row) =>
+      [0, 3, 7].map(frame => ({ pose, frame, sheet: 'transitions', size: '800% 600%', x: frame * 100 / 7, y: row * 20, asset: 'widget-dog-transitions' }))),
   ];
   for (const item of cases) {
     await page.evaluate(value => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
@@ -200,8 +203,8 @@ test('companion actions use the licking, rolling, three sleeping poses and twelv
     await expect(dog).toHaveAttribute('data-sheet', item.sheet);
     await expect(dog).toHaveAttribute('data-pose', item.pose);
     await expect(dog).toHaveAttribute('data-frame', String(item.frame));
-    await expect(dog).toHaveCSS('background-size', item.size);
-    const position = await dog.evaluate(element => {
+    await expect(sprite).toHaveCSS('background-size', item.size);
+    const position = await sprite.evaluate(element => {
       const css = getComputedStyle(element);
       return { x: parseFloat(css.backgroundPositionX), y: parseFloat(css.backgroundPositionY), image: css.backgroundImage };
     });
@@ -214,9 +217,83 @@ test('companion actions use the licking, rolling, three sleeping poses and twelv
     sampleTime: performance.now(), dog: { x: 220, y: 250, size: 76, facing: -1, frame: 5, pose: 'paw', vx: 0, vy: 0 }, bone: null,
   } })));
   await expect(dog).toHaveAttribute('data-sheet', 'actions');
-  await expect(dog).toHaveCSS('background-size', '700% 100%');
-  await expect(dog).toHaveCSS('background-position-y', '50%');
-  expect(await dog.evaluate(element => getComputedStyle(element).backgroundImage)).toContain('widget-dog-actions');
+  await expect(sprite).toHaveCSS('background-size', '700% 100%');
+  await expect(sprite).toHaveCSS('background-position-y', '50%');
+  expect(await sprite.evaluate(element => getComputedStyle(element).backgroundImage)).toContain('widget-dog-actions');
+});
+
+test('visible companion artwork keeps its feet and center anchored without changing its hit target', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame(listener) {
+        window.addEventListener('pet-frame', event => listener((event as CustomEvent).detail));
+        return () => {};
+      },
+      firstFramePainted() {}, onPrepare() {}, surfaceReady() {},
+    };
+  });
+  await page.goto('/pet.html');
+  const dog = page.locator('#desktop-dog');
+  const cases = [
+    { pose: 'walk', frame: 2, columns: 4, rows: 1, column: 2, row: 0 },
+    { pose: 'sit', frame: 3, columns: 7, rows: 1, column: 3, row: 0 },
+    { pose: 'lick', frame: 2, columns: 4, rows: 4, column: 2, row: 0 },
+    { pose: 'roll', frame: 3, columns: 4, rows: 4, column: 3, row: 3 },
+    { pose: 'sleep', frame: 5, columns: 6, rows: 3, column: 5, row: 0 },
+    { pose: 'sleep-side', frame: 3, columns: 6, rows: 3, column: 3, row: 1 },
+    { pose: 'sleep-belly', frame: 0, columns: 6, rows: 3, column: 0, row: 2 },
+    { pose: 'play', frame: 11, columns: 4, rows: 3, column: 3, row: 2 },
+    ...['bridge-lick', 'bridge-sleep', 'bridge-side', 'bridge-belly', 'bridge-play', 'bridge-turn'].flatMap((pose, row) =>
+      [0, 7].map(frame => ({ pose, frame, columns: 8, rows: 6, column: frame, row }))),
+  ];
+  for (const item of cases) for (const facing of [1, -1]) {
+    await page.evaluate(value => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+      sampleTime: performance.now(), dog: { x: 220, y: 250, size: 76, facing: value.facing, frame: value.frame, pose: value.pose, vx: 0, vy: 0, interactive: true }, bone: null,
+    } })), { pose: item.pose, frame: item.frame, facing });
+    await expect(dog).toHaveAttribute('data-pose', item.pose);
+    await expect(dog).toHaveAttribute('data-frame', String(item.frame));
+    await expect(dog).toHaveAttribute('data-facing', String(facing));
+    expect(await dog.boundingBox()).toEqual({ x: 220, y: 250, width: 76, height: 76 });
+    const visible = await page.locator('#desktop-dog-sprite').evaluate(async (element, cell) => {
+      const css = getComputedStyle(element);
+      const image = new Image();
+      image.src = css.backgroundImage.slice(5, -2);
+      await image.decode();
+      const cropLeft = Math.round(cell.column * image.naturalWidth / cell.columns);
+      const cropRight = Math.round((cell.column + 1) * image.naturalWidth / cell.columns);
+      const cropTop = Math.round(cell.row * image.naturalHeight / cell.rows);
+      const cropBottom = Math.round((cell.row + 1) * image.naturalHeight / cell.rows);
+      const width = cropRight - cropLeft;
+      const height = cropBottom - cropTop;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d')!;
+      context.drawImage(image, cropLeft, cropTop, width, height, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height).data;
+      let left = width;
+      let right = 0;
+      let bottom = 0;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (pixels[(y * width + x) * 4 + 3] >= 128) {
+        left = Math.min(left, x);
+        right = Math.max(right, x + 1);
+        bottom = Math.max(bottom, y + 1);
+      }
+      const transform = new DOMMatrix(css.transform);
+      return {
+        bottom: 38 + transform.d * (bottom / height * 76 - 38) + transform.f,
+        center: 38 + transform.a * ((left + right) / 2 / width * 76 - 38) + transform.e,
+      };
+    }, item);
+    expect(Math.abs(visible.bottom - 76 * .98), `${item.pose}/${item.frame} facing ${facing}`).toBeLessThanOrEqual(1);
+    expect(Math.abs(visible.center - 38), `${item.pose}/${item.frame} facing ${facing}`).toBeLessThanOrEqual(1);
+  }
+  // The original chase stays pixel-compatible with its card-to-desktop handoff.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+    sampleTime: performance.now(), dog: { x: 220, y: 250, size: 76, facing: -1, frame: 5, pose: 'paw', vx: 0, vy: 0 }, bone: null,
+  } })));
+  await expect(page.locator('#desktop-dog-sprite')).toHaveAttribute('data-grounded', 'false');
+  await expect(page.locator('#desktop-dog-sprite')).toHaveCSS('transform', 'matrix(-1, 0, 0, 1, 0, 0)');
 });
 
 test('the desktop surface forwards initial and changed reduced-motion preferences', async ({ page }) => {

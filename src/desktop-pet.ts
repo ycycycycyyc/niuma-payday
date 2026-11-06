@@ -1,17 +1,11 @@
-import actions from './assets/widget-dog-actions.webp';
-import walk from './assets/widget-dog-walk.webp';
-import companion from './assets/widget-dog-companion.png';
-import sleeping from './assets/widget-dog-sleep.png';
-import playing from './assets/widget-dog-play.png';
-import type { PetPose } from './lib/pet-motion';
 import type { PetFeeding as PetFeedingState, PetFood } from '../shared/pet-feeding.mjs';
 import { createPetFeedingView } from './lib/pet-feeding-view';
+import { applyPetSprite, loadPetSpriteArtwork } from './lib/pet-sprite';
 import './desktop-pet.css';
 
 type Point = { x: number; y: number };
-type CompanionPose = 'lick' | 'play' | 'sleep' | 'sleep-side' | 'sleep-belly' | 'roll';
 type Dog = Point & {
-  size: number; facing: -1 | 1; frame: number; pose: PetPose | CompanionPose; vx: number; vy: number;
+  size: number; facing: -1 | 1; frame: number; pose: string; vx: number; vy: number;
   interactive?: boolean; feedable?: boolean; reducedMotion?: boolean;
 };
 type Frame = {
@@ -36,6 +30,7 @@ declare global {
 }
 
 const sprite = document.getElementById('desktop-dog') as HTMLButtonElement;
+const artworkSprite = document.getElementById('desktop-dog-sprite')!;
 const cursorBone = document.getElementById('desktop-bone')!;
 let currentFeeding: PetFeedingState | null = null;
 let foodMenuOpen = false;
@@ -47,13 +42,8 @@ const foodView = createPetFeedingView(document.body, {
   onMenuLeave() {},
 });
 window.addEventListener('pagehide', () => foodView.destroy(), { once: true });
-const artworkReady = Promise.all([walk, actions, companion, sleeping, playing].map(src => {
-  const image = new Image();
-  image.src = src;
-  return image.decode();
-})).then(() => true, () => false);
+const artworkReady = loadPetSpriteArtwork();
 
-const sleepRows: Partial<Record<CompanionPose, number>> = { sleep: 0, 'sleep-side': 1, 'sleep-belly': 2 };
 const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
 const reportMotionPreference = () => window.petOverlay?.setReducedMotion?.(motionPreference.matches);
 reportMotionPreference();
@@ -105,22 +95,14 @@ window.petOverlay?.onPrepare?.(() => {
 });
 
 function paint(dog: Dog, x: number, y: number) {
-  if (sprite.dataset.pose !== dog.pose || sprite.dataset.frame !== String(dog.frame)) {
-    sprite.dataset.pose = dog.pose;
-    sprite.dataset.frame = String(dog.frame);
-    const sleepRow = sleepRows[dog.pose as CompanionPose];
-    const sheet = sleepRow !== undefined ? 'sleep' : dog.pose === 'play' ? 'play'
-      : dog.pose === 'lick' || dog.pose === 'roll' ? 'companion' : dog.pose === 'walk' ? 'walk' : 'actions';
-    const column = sheet === 'play' ? dog.frame % 4 : dog.frame;
-    const row = sheet === 'play' ? Math.floor(dog.frame / 4) : sleepRow ?? (dog.pose === 'roll' ? 3 : 0);
-    sprite.dataset.sheet = sheet;
-    sprite.style.backgroundPositionX = `${100 * column / (sheet === 'actions' ? 6 : sheet === 'sleep' ? 5 : 3)}%`;
-    sprite.style.backgroundPositionY = sheet === 'walk' || sheet === 'actions' ? '50%' : `${100 * row / (sheet === 'companion' ? 3 : 2)}%`;
-  }
+  const description = applyPetSprite(artworkSprite, { ...dog, grounded: Boolean(dog.interactive) });
+  sprite.dataset.pose = dog.pose;
+  sprite.dataset.frame = String(dog.frame);
+  sprite.dataset.sheet = description.sheet;
   const size = `${dog.size}px`;
   if (sprite.style.width !== size) sprite.style.width = sprite.style.height = size;
   sprite.dataset.facing = String(dog.facing);
-  sprite.style.transform = `translate3d(${x}px, ${y}px, 0) scaleX(${dog.facing})`;
+  sprite.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   sprite.dataset.feeding = String(Boolean(currentFeeding));
   sprite.hidden = false;
   foodView.render({
