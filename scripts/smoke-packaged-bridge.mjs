@@ -43,8 +43,9 @@ const noop = () => {};
 const handlers = new Map();
 const windows = [];
 const paths = { userData: profile, sessionData: profile };
+let cursor = { x: 0, y: 0 };
 const screen = Object.assign(new EventEmitter(), {
-  getCursorScreenPoint: () => ({ x: 0, y: 0 }),
+  getCursorScreenPoint: () => cursor,
   getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
 });
 const app = Object.assign(new EventEmitter(), {
@@ -106,6 +107,7 @@ class BrowserWindow extends EventEmitter {
     this.options = options;
     this.visible = false;
     this.minimized = false;
+    this.mouseIgnored = false;
     this.destroyed = false;
     this.id = windows.length + 1;
     this.bounds = { x: 0, y: 0, ...options };
@@ -172,6 +174,7 @@ class BrowserWindow extends EventEmitter {
 
   hide() {
     this.visible = false;
+    this.emit('hide');
   }
 
   isVisible() {
@@ -226,6 +229,9 @@ class BrowserWindow extends EventEmitter {
   }
 
   focus() {}
+  setIgnoreMouseEvents(ignore) {
+    this.mouseIgnored = ignore;
+  }
   setAlwaysOnTop() {}
   setVisibleOnAllWorkspaces() {}
 }
@@ -254,6 +260,8 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => new Response('offline fixture', { status: 503 });
 
 try {
+  const oldCardPosition = { x: 260, y: 310 };
+  fs.writeFileSync(path.join(profile, 'desktop.json'), JSON.stringify({ widgetPosition: oldCardPosition }));
   await import(mainURL);
   await Promise.resolve();
   const api = windows[0].bridge;
@@ -301,6 +309,25 @@ try {
   await api.showWidget();
   assert.equal(windows.length, 2);
   const widgetApi = windows[1].bridge;
+  const widget = windows[1];
+  const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  if (!['1.0.0', '1.0.1'].includes(releaseVersion)) {
+    const bounds = widget.getBounds();
+    assert.deepEqual(bounds, { width: 350, height: 232, x: oldCardPosition.x, y: oldCardPosition.y - 72 });
+    screen.emit('display-metrics-changed');
+    assert.deepEqual(widget.getBounds(), bounds);
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      cursor = { x: bounds.x + 40, y: bounds.y + 71 };
+      await new Promise(resolve => setTimeout(resolve, 70));
+      assert.equal(widget.mouseIgnored, true);
+      cursor.y++;
+      // The native draggable card does not necessarily deliver a DOM mouseleave.
+      await new Promise(resolve => setTimeout(resolve, 70));
+      assert.equal(widget.mouseIgnored, false);
+      pass('packaged widget passes pet-lane clicks through and restores card hit testing without DOM mouse events');
+    }
+    pass('floating window preserves the legacy card position across display changes');
+  }
   assert.equal((await widgetApi.getState()).settings.dailySalary, 680);
   let received = null;
   const unsubscribe = widgetApi.onStateChanged(value => {

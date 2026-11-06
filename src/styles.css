@@ -276,11 +276,63 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .advanced-settings > summary { color: #805f66; font-size: 12px; cursor: pointer; }
 .advanced-settings[open] > summary { margin-bottom: 20px; }
 
-/* The frameless companion is exactly 350 × 160 CSS pixels. */
+/* The dog's lane sits above the 350 × 160 salary card. */
 html:has(body.widget-body) { background: transparent; }
 body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
 .widget-body #root { width: 100vw; height: 100dvh; overflow: hidden; }
-.widget { position: relative; display: flex; flex-direction: column; width: 350px; max-width: 100%; height: 160px; padding: 15px 18px 14px; border: 1px solid #905e733f; border-radius: 16px; background: #5e2d46; color: #fff7ee; overflow: hidden; user-select: none; -webkit-app-region: drag; }
+.widget-stack, .browser-widget-host {
+  --widget-width: 350px;
+  --card-height: 160px;
+  --lane-height: 72px;
+  width: var(--widget-width);
+  max-width: 100%;
+}
+.widget-pet-lane {
+  --pet-size: 76px;
+  --patrol-time: 16s;
+  position: relative;
+  z-index: 1;
+  height: var(--lane-height);
+  pointer-events: none;
+}
+.widget-body .widget-pet-lane { pointer-events: auto; -webkit-app-region: no-drag; }
+.pet-traveller {
+  position: absolute;
+  left: 12px;
+  bottom: -2px;
+  width: calc(100% - var(--pet-size) - 24px);
+  pointer-events: none;
+  animation: pet-patrol var(--patrol-time) linear infinite;
+}
+.pet-facing { width: var(--pet-size); animation: pet-turn var(--patrol-time) step-end infinite; }
+.pet-sprite {
+  width: var(--pet-size);
+  height: var(--pet-size);
+  background: url('./assets/widget-dog-walk.webp') left center / 400% 100% repeat-x;
+  animation: pet-footsteps .8s steps(4, end) infinite;
+}
+@keyframes pet-patrol {
+  0%, 90%, 100% { transform: translateX(0); }
+  40%, 50% { transform: translateX(100%); }
+}
+/* Lock to a single paw pose while pausing, and turn before walking back. */
+@keyframes pet-turn {
+  0% { transform: scaleX(1); --stride-end: calc(-4 * var(--pet-size)); }
+  40% { transform: scaleX(1); --stride-end: 0px; }
+  46% { transform: scaleX(-1); --stride-end: 0px; }
+  50% { transform: scaleX(-1); --stride-end: calc(-4 * var(--pet-size)); }
+  90% { transform: scaleX(-1); --stride-end: 0px; }
+  96%, 100% { transform: scaleX(1); --stride-end: 0px; }
+}
+@keyframes pet-footsteps {
+  from { background-position-x: 0px; }
+  to { background-position-x: var(--stride-end); }
+}
+.widget-pet-lane[data-paused] :is(.pet-traveller, .pet-facing, .pet-sprite) { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .pet-sprite { background-position-x: calc(-1 * var(--pet-size)); }
+}
+.widget { position: relative; display: flex; flex-direction: column; width: 100%; height: var(--card-height); padding: 15px 18px 14px; border: 1px solid #905e733f; border-radius: 16px; background: #5e2d46; color: #fff7ee; overflow: hidden; user-select: none; -webkit-app-region: drag; }
 .widget-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #f9dee0; font-size: 10px; }
 .widget-head > span { display: inline-flex; align-items: center; gap: 7px; }
 .widget-grip { margin-left: auto; color: #dfb8c2; }
@@ -295,7 +347,16 @@ body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
 .widget-foot > span:last-child { color: #f9dee0; }
 .widget-progress { position: absolute; bottom: 0; left: 0; width: 100%; height: 3px; background: #824f66; }
 .widget-progress i { display: block; height: 100%; background: #e6cbc7; }
-.browser-widget-host { position: fixed; z-index: 50; width: 350px; max-width: 100vw; height: 160px; border-radius: 16px; box-shadow: 0 14px 40px #5629413d; touch-action: none; cursor: grab; }
+.browser-widget-host {
+  position: fixed;
+  z-index: 50;
+  right: clamp(0px, var(--widget-right), 100vw - var(--widget-width));
+  bottom: clamp(0px, var(--widget-bottom), 100dvh - var(--lane-height) - var(--card-height));
+  max-width: 100vw;
+  pointer-events: none;
+  touch-action: none;
+  cursor: grab;
+}
 .browser-widget-host:active { cursor: grabbing; }
 .widget-preview { -webkit-app-region: no-drag; }
 
@@ -396,7 +457,6 @@ body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
 .toast > svg { color: #efdb9f; }
 .widget { container-type: inline-size; background: #642d47; color: #fff8ee; border-color: #895369; }
 .widget-head, .widget-foot { color: #eec5cf; }
-.widget-head .mascot.small { width: 28px; max-width: 28px; height: 28px; margin: -3px 0 -3px -2px; flex: 0 0 28px; filter: none; }
 .widget-head .status-dot { background: #dce8ab; }
 .widget-head .status-dot.resting { background: #ddb2be; }
 .widget-grip { color: #e1b4bf; }
@@ -404,7 +464,7 @@ body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
 .widget-actions button:hover { color: #fff8ed; background: #854963; }
 .widget-foot > span:last-child { color: #ffe7d6; }
 .widget-progress { background: #95566c; }
-.widget-preview { box-shadow: inset 0 0 0 1px #ffffff08; }
+.widget-preview { pointer-events: auto; box-shadow: inset 0 0 0 1px #ffffff08, 0 14px 40px #5629413d; }
 
 @media (min-width: 1500px) {
   main { padding: 38px 44px 24px; }
@@ -673,4 +733,4 @@ body.widget-body { min-width: 0; background: transparent; overflow: hidden; }
   line-height: 1.6;
 }
 .connection-error button { margin-top: 1rem; }
-.widget-body .connection-error { margin: 0; border-radius: 14px; background: var(--paper); font-size: 12px; }
+.widget-body .connection-error { margin: 72px 0 0; border-radius: 14px; background: var(--paper); font-size: 12px; }

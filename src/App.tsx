@@ -227,7 +227,25 @@ function App() {
     {settingsOpen && <SettingsModal settings={state.settings} onSave={saveSettings} onClose={() => setSettingsOpen(false)} />}
     {goalOpen && <GoalModal goal={state.goal} onSave={async goal => { await save({ ...state, goal }); setGoalOpen(false); setToast('新的小目标，安排好了。'); }} onClose={() => setGoalOpen(false)} />}
     {notice && <div className="toast" role={notice.error ? 'alert' : 'status'}>{notice.error ? <span aria-hidden="true">!</span> : <Check size={17} />}<span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="关闭提示"><X size={14} /></button></div>}
-    {browserWidget && <div className="browser-widget-host" style={{ right: widgetPosition.x, bottom: widgetPosition.y }} onPointerDown={e => { if ((e.target as HTMLElement).closest('button')) return; drag.current = { clientX: e.clientX, clientY: e.clientY, ...widgetPosition }; e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { if (!drag.current) return; setWidgetPosition({ x: Math.max(0, Math.min(window.innerWidth - Math.min(350, window.innerWidth), drag.current.x + drag.current.clientX - e.clientX)), y: Math.max(0, Math.min(window.innerHeight - 160, drag.current.y + drag.current.clientY - e.clientY)) }); }} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}><Widget state={state} preview onRestore={() => setBrowserWidget(false)} onHide={() => setBrowserWidget(false)} /></div>}
+    {browserWidget && <div className="browser-widget-host"
+      style={{ '--widget-right': `${widgetPosition.x}px`, '--widget-bottom': `${widgetPosition.y}px` } as CSSProperties}
+      onPointerDown={e => {
+        if (e.button !== 0 || (e.target as Element).closest('button')) return;
+        const bounds = e.currentTarget.getBoundingClientRect();
+        drag.current = { clientX: e.clientX, clientY: e.clientY, x: window.innerWidth - bounds.right, y: window.innerHeight - bounds.bottom };
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }}
+      onPointerMove={e => {
+        if (!drag.current) return;
+        const { offsetWidth, offsetHeight } = e.currentTarget;
+        setWidgetPosition({
+          x: Math.max(0, Math.min(window.innerWidth - offsetWidth, drag.current.x + drag.current.clientX - e.clientX)),
+          y: Math.max(0, Math.min(window.innerHeight - offsetHeight, drag.current.y + drag.current.clientY - e.clientY)),
+        });
+      }}
+      onLostPointerCapture={() => { drag.current = null; }}>
+      <Widget state={state} preview onRestore={() => setBrowserWidget(false)} onHide={() => setBrowserWidget(false)} />
+    </div>}
   </div>;
 }
 export default App;

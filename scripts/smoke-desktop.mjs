@@ -83,10 +83,13 @@ try {
   const widgetState = initialWindows.find(window => window.url.endsWith('#/widget'));
   assert.equal(widgetState.alwaysOnTop, true);
   assert.equal(widgetState.bounds.width, 350);
-  assert.equal(widgetState.bounds.height, 160);
+  assert.equal(widgetState.bounds.height, 232);
+  const card = await widget.locator('.widget').boundingBox();
+  assert.equal(card.y, 72);
+  assert.equal(card.height, 160);
   assert.equal(initialWindows.find(window => !window.url.endsWith('#/widget'))?.minimized, true);
   await widget.screenshot({ path: path.join(artifacts, 'native-widget.png'), fullPage: false });
-  record('manual floating widget is visible, always on top, 350×160; main minimized');
+  record('manual floating widget is visible, always on top, with a 72 px pet lane and 350×160 card; main minimized');
 
   await widget.getByRole('button', { name: '返回主窗口', exact: true }).click();
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);

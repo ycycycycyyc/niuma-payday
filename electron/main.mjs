@@ -28,11 +28,15 @@ let quitting = false;
 let appState = null;
 let desktopState = {};
 let positionTimer;
+let lanePointerTimer;
+let widgetPassesClicks = false;
 let scheduleTimer;
 let widgetSession = createWidgetSession();
 let widgetRequest = 0;
 const calendarJobs = new Map();
 const calendarAttempts = new Map();
+const PET_LANE_HEIGHT = 72;
+const WIDGET_CARD_HEIGHT = 160;
 const CALENDAR_TTL = 7 * 24 * 60 * 60 * 1000;
 const RETRY_DELAY = 6 * 60 * 60 * 1000;
 let calendarStatus = { status: 'idle', message: '节假日日历尚未更新', calendar: {} };
@@ -126,7 +130,6 @@ const webPreferences = {
   nodeIntegration: false,
   sandbox: true,
   webSecurity: true,
-  // Salary is derived from wall-clock time; keeping the visible widget responsive is intentional.
   backgroundThrottling: false,
 };
 
@@ -172,7 +175,7 @@ function createMainWindow() {
 
 function fitWidgetBounds(saved) {
   const width = 350;
-  const height = 160;
+  const height = WIDGET_CARD_HEIGHT + PET_LANE_HEIGHT;
   const valid = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y);
   const point = valid ? { x: Math.round(saved.x), y: Math.round(saved.y) } : screen.getCursorScreenPoint();
   const area = screen.getDisplayNearestPoint(point).workArea;
@@ -180,14 +183,51 @@ function fitWidgetBounds(saved) {
     width,
     height,
     x: Math.max(area.x, Math.min(valid ? point.x : area.x + area.width - width - 24, area.x + area.width - width)),
-    y: Math.max(area.y, Math.min(valid ? point.y : area.y + 40, area.y + area.height - height)),
+    y: Math.max(area.y, Math.min(valid ? point.y - PET_LANE_HEIGHT : area.y + 40, area.y + area.height - height)),
   };
+}
+
+// Persist the card's top-left corner, the same anchor used before the pet was added.
+function widgetCardPosition() {
+  const { x, y } = widgetWindow.getBounds();
+  return { x, y: y + PET_LANE_HEIGHT };
+}
+
+function stopWidgetPointerTracking() {
+  clearInterval(lanePointerTimer);
+  lanePointerTimer = undefined;
+  if (widgetPassesClicks && widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setIgnoreMouseEvents(false);
+  widgetPassesClicks = false;
+}
+
+function syncWidgetMouseRegion() {
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return;
+  const cursor = screen.getCursorScreenPoint();
+  const { x, y, width } = widgetWindow.getBounds();
+  const overLane = cursor.x >= x && cursor.x < x + width && cursor.y >= y && cursor.y < y + PET_LANE_HEIGHT;
+  if (overLane !== widgetPassesClicks) {
+    widgetWindow.setIgnoreMouseEvents(overLane);
+    widgetPassesClicks = overLane;
+  }
+}
+
+function startWidgetPointerTracking() {
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return;
+  syncWidgetMouseRegion();
+  // Native drag regions swallow DOM enter/leave events. Sample the OS cursor
+  // only while visible and change the native hit test only on a lane crossing.
+  lanePointerTimer ??= setInterval(syncWidgetMouseRegion, 24);
+}
+
+function refitWidget() {
+  if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  widgetWindow.setBounds(fitWidgetBounds(widgetCardPosition()));
+  if (widgetWindow.isVisible()) syncWidgetMouseRegion();
 }
 
 function saveWidgetPosition() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
-  const { x, y } = widgetWindow.getBounds();
-  desktopState.widgetPosition = { x, y };
+  desktopState.widgetPosition = widgetCardPosition();
   try { writeJSON(desktopPath(), desktopState); } catch (error) {
     console.warn('Unable to save widget position:', error.message);
   }
@@ -208,7 +248,7 @@ async function createWidget() {
     hasShadow: false,
     title: '薪动 · 工资浮窗',
     icon: appIcon,
-    webPreferences,
+    webPreferences: { ...webPreferences, backgroundThrottling: true },
   });
   widgetWindow.setAlwaysOnTop(true, 'floating');
   if (process.platform === 'darwin') {
@@ -224,7 +264,8 @@ async function createWidget() {
       hideWidget();
     }
   });
-  widgetWindow.on('closed', () => { widgetWindow = undefined; });
+  widgetWindow.on('hide', stopWidgetPointerTracking);
+  widgetWindow.on('closed', () => { widgetWindow = undefined; stopWidgetPointerTracking(); });
   const createdWindow = widgetWindow;
   try {
     await loadWindow(createdWindow, true);
@@ -256,8 +297,9 @@ async function showWidget(minimizeMain = true, mode = 'manual') {
         return;
       }
     }
-    widgetWindow.setBounds(fitWidgetBounds(widgetWindow.getBounds()));
+    refitWidget();
     widgetWindow.showInactive();
+    startWidgetPointerTracking();
     if (minimizeMain && mainWindow && !mainWindow.isMinimized()) mainWindow.minimize();
   } catch (error) {
     if (request !== widgetRequest || quitting) return;
@@ -444,6 +486,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true;
     clearTimeout(positionTimer);
+    stopWidgetPointerTracking();
     clearInterval(scheduleTimer);
     widgetRequest++;
     saveWidgetPosition();
@@ -476,11 +519,7 @@ if (!app.requestSingleInstanceLock()) {
     powerMonitor.on('resume', backgroundTick);
     powerMonitor.on('unlock-screen', backgroundTick);
     void refreshCalendar().catch(error => console.warn('Unable to load holiday calendar:', error.message));
-    screen.on('display-removed', () => {
-      if (widgetWindow) widgetWindow.setBounds(fitWidgetBounds(widgetWindow.getBounds()));
-    });
-    screen.on('display-metrics-changed', () => {
-      if (widgetWindow) widgetWindow.setBounds(fitWidgetBounds(widgetWindow.getBounds()));
-    });
+    screen.on('display-removed', refitWidget);
+    screen.on('display-metrics-changed', refitWidget);
   });
 }
