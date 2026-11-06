@@ -13,6 +13,7 @@ declare global {
       platform: string;
       getState(): Promise<unknown>;
       setState(state: unknown): Promise<unknown>;
+      setPrivacy?(hidden: boolean): Promise<boolean>;
       onStateChanged(callback: (state: unknown) => void): () => void;
       refreshCalendar(): Promise<{ status: string; message: string; calendar: CalendarCache }>;
       showWidget(): Promise<void>; hideWidget(): Promise<void>; restoreMain(): Promise<void>;
@@ -86,6 +87,16 @@ export async function writeState(state: AppState): Promise<AppState> {
   if (isDesktopHost()) return confirmSave(await desktopStore().setState(state), state);
   localStorage.setItem(KEY, JSON.stringify(state));
   return state;
+}
+
+export async function writePrivacy(hidden: boolean) {
+  if (window.niuma?.setPrivacy) {
+    const saved = await window.niuma.setPrivacy(hidden);
+    if (saved !== hidden) throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    return;
+  }
+  const latest = await readState();
+  await writeState({ ...latest, privacy: hidden });
 }
 
 export function subscribeState(callback: (state: AppState) => void) {

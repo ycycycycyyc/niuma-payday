@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, GripHorizontal, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, Eye, EyeOff, GripHorizontal, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import layout from '../../shared/widget-layout.json';
 import lensMap from '../assets/widget-lens-displacement.png?inline';
@@ -32,10 +32,12 @@ function LensFilter({ id }: { id: string }) {
   </svg>;
 }
 
-export default function Widget({ state, onRestore, onHide, preview = false }: { state: AppState; onRestore: () => void; onHide: () => void; preview?: boolean }) {
+export default function Widget({ state, onTogglePrivacy, onRestore, onHide, preview = false }: { state: AppState; onTogglePrivacy: () => Promise<void>; onRestore: () => void; onHide: () => void; preview?: boolean }) {
   const [chasing, setChasing] = useState(false);
   const boneButton = useRef<HTMLButtonElement>(null);
   const desktop = preview ? undefined : window.niuma;
+  const [privacySave, setPrivacySave] = useState<'idle' | 'saving' | 'failed'>('idle');
+  const privacyLabel = state.privacy ? '显示金额' : '隐藏金额';
   const [layer, setLayer] = useState<WidgetLayer | null>(null);
   const [changingLayer, setChangingLayer] = useState(false);
   const [layerError, setLayerError] = useState(false);
@@ -56,6 +58,16 @@ export default function Widget({ state, onRestore, onHide, preview = false }: { 
     });
     return () => { layerRevision.current++; unsubscribe?.(); };
   }, [desktop]);
+
+  async function changePrivacy() {
+    setPrivacySave('saving');
+    try {
+      await onTogglePrivacy();
+      setPrivacySave('idle');
+    } catch {
+      setPrivacySave('failed');
+    }
+  }
 
   async function changeLayer() {
     if (!desktop?.setWidgetLayer || !desktop.getWidgetLayer || changingLayer) return;
@@ -98,6 +110,10 @@ export default function Widget({ state, onRestore, onHide, preview = false }: { 
           <GripHorizontal size={18} className="widget-grip" aria-hidden="true" />
         </div>
         <div className="widget-actions">
+          <button type="button" aria-label={privacyLabel} title={privacyLabel}
+            disabled={privacySave === 'saving'} onClick={changePrivacy}>
+            {state.privacy ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+          </button>
           <button ref={boneButton} type="button" className="widget-bone-toggle" aria-pressed={chasing}
             aria-label={chasing ? '收起骨头' : '拿起骨头'} title={chasing ? '收起骨头（Esc）' : '拿起骨头，让她追着玩'}
             onClick={() => setChasing(held => !held)}><Bone size={17} aria-hidden="true" /></button>
@@ -111,7 +127,7 @@ export default function Widget({ state, onRestore, onHide, preview = false }: { 
         </div>
       </div>
       <div className="widget-middle">
-        <div className="widget-earnings"><span className="widget-earnings-label">今日已赚</span><LiveAmount settings={settings} demo={demo} privacy={state.privacy} calendar={calendar} compact /></div>
+        <div className="widget-earnings"><span className="widget-earnings-label" role={privacySave === 'failed' ? 'alert' : undefined}>{privacySave === 'failed' ? '金额设置未保存，请重试' : '今日已赚'}</span><LiveAmount settings={settings} demo={demo} privacy={state.privacy} calendar={calendar} compact /></div>
         <div className="widget-mascot" aria-hidden="true"><Mascot /></div>
       </div>
       <div className="widget-foot"><span className="widget-time-label"><Clock3 size={19} aria-hidden="true" />{timeLabel}</span><span className={`widget-time-value ${onShift ? '' : 'schedule'}`}>{timeValue}</span></div>

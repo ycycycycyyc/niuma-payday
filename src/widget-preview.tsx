@@ -159,15 +159,24 @@ function Preview() {
   useLayoutEffect(() => {
     if (surface === 'widget') setPosition(previous => previous && clamp(previous));
   }, [clamp, surface]);
+  const sendPrivacyToDashboard = (privacy: boolean) => {
+    dashboardFrame.current?.contentWindow?.postMessage({ channel: 'niuma-preview', action: 'privacy', privacy }, '*');
+  };
+  const togglePrivacy = async () => {
+    const privacy = !profile.privacy;
+    setProfile(previous => ({ ...previous, privacy }));
+    sendPrivacyToDashboard(privacy);
+  };
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (!dashboardFrame.current || event.source !== dashboardFrame.current.contentWindow || event.data?.channel !== 'niuma-preview') return;
+      if (event.data.action === 'ready') sendPrivacyToDashboard(profile.privacy);
       if (event.data.action === 'widget') setSurface('widget');
       if (event.data.action === 'state') setProfile(normalizeState(event.data.state));
     };
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
-  }, []);
+  }, [profile.privacy]);
 
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !event.isPrimary || !(event.target instanceof Element) || event.target.closest('button')) return;
@@ -204,7 +213,7 @@ function Preview() {
       {surface === 'widget' && <div className="preview-frame" ref={frame} style={{ ...widgetLayoutStyle, ...(position && { left: position.x, top: position.y, transform: 'none' }) }}
         onPointerDown={startDrag} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}>
         <WallpaperLens position={position} />
-        <Widget state={profile} preview onRestore={openDashboard} onHide={() => setSurface('hidden')} />
+        <Widget state={profile} preview onTogglePrivacy={togglePrivacy} onRestore={openDashboard} onHide={() => setSurface('hidden')} />
       </div>}
       {dashboard && <iframe ref={dashboardFrame} title="主界面演示" className="preview-dashboard"
         hidden={surface !== 'dashboard'} srcDoc={dashboard.html}

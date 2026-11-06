@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowDownRight, ArrowRight, ArrowUpRight, BadgeCheck, Check, ChevronRight, Coffee, Coins, Eye, EyeOff, FlaskConical, Flower2, Heart, LayoutDashboard, Maximize2, Minus, Monitor, MoreHorizontal, Pause, Play, Plus, Settings2, ShieldCheck, Sparkles, Sun, Target, Trophy, Wallet, X, Zap } from 'lucide-react';
 import { DEFAULT_SETTINGS, calculateSalary, earningsBetween, type SalarySettings } from './lib/salary';
 import { clockDate, currencySymbol, duration, money, useClock } from './lib/clock';
-import { DEFAULT_STATE, readState, subscribeState, writeState, type AppState } from './lib/store';
+import { DEFAULT_STATE, readState, subscribeState, writePrivacy, writeState, type AppState } from './lib/store';
 import SettingsModal from './components/SettingsModal';
 import LiveAmount from './components/LiveAmount';
 import Mascot from './components/Mascot';
@@ -87,7 +87,11 @@ function App() {
   const action = async (fn: () => Promise<void>, operation = 'window') => {
     try { await fn(); } catch (error) { showError(error, operation); }
   };
-  const togglePrivacy = () => { save({ ...state, privacy: !state.privacy }).catch(error => showError(error, 'save')); };
+  const togglePrivacy = async () => {
+    const hidden = !state.privacy;
+    await writePrivacy(hidden);
+    setState(previous => ({ ...previous, privacy: hidden }));
+  };
   const openWidget = async () => {
     if (isDesktopHost()) {
       if (!window.niuma?.showWidget) throw new Error('桌面连接未就绪，请从托盘退出并重新打开应用。');
@@ -154,7 +158,7 @@ function App() {
 
   if (!loaded) return <div className="loading-state"><Flower2 size={28} /><span>正在唤醒你的工资…</span></div>;
   if (profileError) return <div className="connection-error" role="alert"><p>{profileError}</p><button className="button secondary" onClick={() => window.location.reload()}>重新连接</button></div>;
-  if (isWidget) return <Widget state={state} onRestore={() => void action(() => window.niuma!.restoreMain())} onHide={() => void action(() => window.niuma!.hideWidget())} />;
+  if (isWidget) return <Widget state={state} onTogglePrivacy={togglePrivacy} onRestore={() => void action(() => window.niuma!.restoreMain())} onHide={() => void action(() => window.niuma!.hideWidget())} />;
 
   const restCard = <section className={`rest-card ${breakStart !== null ? 'is-resting' : ''}`}>
     <div className="card-top"><span className="section-label"><Coffee size={18} />带薪充电站</span></div>
@@ -178,7 +182,7 @@ function App() {
     <div className="main-shell">
       <header className={`topbar ${window.niuma ? 'native-titlebar' : ''}`} onDoubleClick={e => { if (e.target === e.currentTarget && window.niuma) void action(() => window.niuma!.maximize()); }}>
         <div className="breadcrumb"><span>我的空间</span><ChevronRight size={13} /><strong>{page === 'dashboard' ? '薪动时刻' : page === 'playground' ? '快乐实验室' : '打工成就'}</strong></div>
-        <div className="topbar-actions"><span className={`mode-indicator ${demo ? 'demo' : ''}`}><span />{demo ? '体验模式 · 演示数据' : '本地工资估算'}</span><button className="icon-button" onClick={togglePrivacy} aria-label={state.privacy ? '显示金额' : '隐藏金额'} title={state.privacy ? '显示金额' : '隐藏金额'}>{state.privacy ? <EyeOff size={18} /> : <Eye size={18} />}</button><span className="avatar">牛</span>
+        <div className="topbar-actions"><span className={`mode-indicator ${demo ? 'demo' : ''}`}><span />{demo ? '体验模式 · 演示数据' : '本地工资估算'}</span><button className="icon-button" onClick={() => void action(togglePrivacy, 'save')} aria-label={state.privacy ? '显示金额' : '隐藏金额'} title={state.privacy ? '显示金额' : '隐藏金额'}>{state.privacy ? <EyeOff size={18} /> : <Eye size={18} />}</button><span className="avatar">牛</span>
           {window.niuma && <div className="window-controls"><button onClick={() => void action(() => window.niuma!.minimize())} aria-label="最小化"><Minus size={15} /></button><button onClick={() => void action(() => window.niuma!.maximize())} aria-label={maximized ? '还原窗口' : '最大化'}><Maximize2 size={13} /></button><button className="window-close" onClick={() => void action(() => window.niuma!.close())} aria-label="收起到托盘" title="收起到托盘，后台继续运行"><X size={17} /></button></div>}
         </div>
       </header>
@@ -205,7 +209,7 @@ function App() {
           <div className="dashboard-grid">
             <section className="earnings-card">
               <div className="card-top"><span className="section-label"><span className={`status-dot ${salary.status !== 'working' ? 'resting' : ''}`} />{salary.statusLabel}</span><span className="outlined-tag">{demo ? 'DEMO' : 'LIVE'}<span className="live-bars"><i /><i /><i /></span></span></div>
-              <div className="earnings-caption">今天，已经为自己赚了<button className="icon-button" onClick={togglePrivacy} aria-label={state.privacy ? '显示今日金额' : '隐藏今日金额'}>{state.privacy ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>
+              <div className="earnings-caption">今天，已经为自己赚了<button className="icon-button" onClick={() => void action(togglePrivacy, 'save')} aria-label={state.privacy ? '显示今日金额' : '隐藏今日金额'}>{state.privacy ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>
               <LiveAmount settings={settings} demo={demo} privacy={state.privacy} calendar={demo ? {} : state.calendar} />
               <div className="earning-rate"><span className="mint-badge"><ArrowUpRight size={15} />{amountText(salary.hourlyRate)} / 小时</span><span>{salary.status === 'working' ? `每一秒，预估 +${state.privacy ? '••••' : `${symbol}${salary.perSecond.toFixed(4)}`}` : salary.status === 'break' ? '午休暂停计薪，好好吃顿饭。' : salary.status === 'after' ? '今天辛苦了，把时间还给生活。' : '工作时段自动开始，不必手动打卡。'}</span></div>
               <div className="workday-track">
@@ -260,7 +264,7 @@ function App() {
         });
       }}
       onLostPointerCapture={() => { drag.current = null; }}>
-      <Widget state={state} preview onRestore={() => setBrowserWidget(false)} onHide={() => setBrowserWidget(false)} />
+      <Widget state={state} onTogglePrivacy={togglePrivacy} preview onRestore={() => setBrowserWidget(false)} onHide={() => setBrowserWidget(false)} />
     </div>}
   </div>;
 }

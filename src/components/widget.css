@@ -99,7 +99,7 @@ body.widget-body { min-width: 0; overflow: hidden; }
 .widget-status, .widget-earnings-label, .widget .live-amount, .widget-foot { text-shadow: var(--glass-shadow); }
 .widget-status > i { width: 7px; height: 7px; border-radius: 50%; background: #a58295; }
 .widget-status > i.active { background: #aa5682; box-shadow: 0 0 0 3px #d88ead32; }
-.widget-grip { position: absolute; left: 50%; transform: translateX(-50%); color: var(--glass-muted); opacity: .74; pointer-events: none; }
+.widget-grip { margin-left: auto; flex-shrink: 0; color: var(--glass-muted); opacity: .74; pointer-events: none; }
 .widget-actions { display: flex; flex: none; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
 .widget-actions button {
   display: grid; place-items: center; width: 30px; height: 29px; padding: 0;

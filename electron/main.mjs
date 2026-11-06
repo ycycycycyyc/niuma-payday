@@ -513,6 +513,16 @@ function createTray() {
   }
 }
 
+function saveProfile(next) {
+  try { writeJSON(statePath(), next); } catch (error) {
+    if (['EPERM', 'EACCES', 'EBUSY', 'EROFS'].includes(error.code)) throw new Error('[SAVE_PERMISSION] 无法写入本机应用数据目录，请检查目录权限或关闭占用文件的程序。');
+    if (error.code === 'ENOSPC') throw new Error('[SAVE_SPACE] 磁盘空间不足，请腾出空间后再试。');
+    throw new Error('[SAVE_FAILED] 无法保存设置，请检查本机磁盘后重试。');
+  }
+  appState = next;
+  broadcastState();
+}
+
 function installIPC() {
   ipcMain.on('niuma:set-widget-pet', (event, state) => {
     if (!widgetWindow || event.sender?.id !== widgetWindow.webContents.id || !isTrustedIpc(event, ownedContents, isAllowedURL)) return;
@@ -533,6 +543,11 @@ function installIPC() {
     return callback(...args);
   });
   handle('niuma:get-state', () => appState);
+  handle('niuma:set-privacy', hidden => {
+    if (typeof hidden !== 'boolean') throw new Error('[SETTINGS_INVALID] 金额显隐设置无效。');
+    saveProfile({ version: 2, configured: false, ...appState, privacy: hidden });
+    return appState.privacy;
+  });
   handle('niuma:get-widget-layer', getWidgetLayer);
   handle('niuma:set-widget-layer', setWidgetLayer);
   handle('niuma:set-state', (value) => {
@@ -543,13 +558,7 @@ function installIPC() {
     if (!validState(next)) throw new Error('[SETTINGS_INVALID] 设置无效，请检查日薪、上下班时间和午休安排。');
     // Calendar data is authoritative in the main process. A stale renderer must not replace it.
     next.calendar = normalizeCalendarCache(appState?.calendar);
-    try { writeJSON(statePath(), next); } catch (error) {
-      if (['EPERM', 'EACCES', 'EBUSY', 'EROFS'].includes(error.code)) throw new Error('[SAVE_PERMISSION] 无法写入本机应用数据目录，请检查目录权限或关闭占用文件的程序。');
-      if (error.code === 'ENOSPC') throw new Error('[SAVE_SPACE] 磁盘空间不足，请腾出空间后再试。');
-      throw new Error('[SAVE_FAILED] 无法保存设置，请检查本机磁盘后重试。');
-    }
-    appState = next;
-    broadcastState();
+    saveProfile(next);
     backgroundTick();
     return appState;
   });

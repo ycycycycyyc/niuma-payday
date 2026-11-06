@@ -9,6 +9,7 @@ const listen = (channel, callback) => {
 
 contextBridge.exposeInMainWorld('niuma', {
   platform: process.platform,
+  setPrivacy: (hidden) => ipcRenderer.invoke('niuma:set-privacy', hidden),
   getState: () => ipcRenderer.invoke('niuma:get-state'),
   setState: (value) => ipcRenderer.invoke('niuma:set-state', value),
   onStateChanged: (callback) => listen('niuma:state-changed', callback),
