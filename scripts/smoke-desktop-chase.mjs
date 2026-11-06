@@ -38,6 +38,7 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
   await click(button('拿起骨头'));
   await expect(button('收起骨头')).toHaveAttribute('aria-pressed', 'true');
   await click(button('将浮窗置底'));
+  await expect(button('将浮窗置顶')).toBeVisible();
   await expect.poll(() => widget.evaluate(async () => (await window.niuma.getDesktopPetState()).phase)).toBe('chasing');
   const overlay = desktop.windows().find(p => p.url().endsWith('/pet.html'));
   assert.ok(overlay, 'The desktop drawing surface is ready');
@@ -143,7 +144,22 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
   await expect(button('将浮窗置底')).toBeVisible();
   await click(button('拿起骨头'));
   await expect(button('收起骨头')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => widget.evaluate(async () => (await window.niuma.getDesktopPetState()).phase)).toBe('chasing');
+  const control = await button('收起骨头').boundingBox();
+  assert.ok(control);
+  const controlPoint = await desktop.evaluate(({ BrowserWindow }, box) => {
+    const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('#/widget'));
+    const bounds = win.getContentBounds(), zoom = win.webContents.getZoomFactor();
+    return { x: bounds.x + (box.x + box.width / 2) * zoom, y: bounds.y + (box.y + box.height / 2) * zoom };
+  }, control);
+  await move(controlPoint);
+  await expect.poll(async () => {
+    const pet = await paintedPet(desktop);
+    return pet ? Math.hypot(pet.x - controlPoint.x, pet.y - controlPoint.y) : Infinity;
+  }, { timeout: 8000 }).toBeLessThan(35);
+  await widget.waitForTimeout(320);
   await click(button('收起骨头'));
   await expect(button('拿起骨头')).toHaveAttribute('aria-pressed', 'false');
   await expect(widget.locator('.widget-dog')).toBeVisible({ timeout:12000 });
+  record('the real bone button remains clickable after the feedable desktop dog follows the pointer over the toolbar');
 }

@@ -149,6 +149,16 @@ export class DesktopPet {
       cursor.y < rect.y + rect.height + padding);
   }
 
+  overWidgetCard(cursor) {
+    const widget = this.getWidget();
+    if (!widget || widget.isDestroyed() || !widget.isVisible() || widget.isMinimized()) return false;
+    const bounds = widget.getContentBounds();
+    const zoom = widget.webContents.getZoomFactor();
+    const top = bounds.y + petLaneHeight(bounds.height / zoom) * zoom;
+    return cursor.x >= bounds.x && cursor.x < bounds.x + bounds.width &&
+      cursor.y >= top && cursor.y < bounds.y + bounds.height;
+  }
+
   tickFeeding(cursor, now) {
     const trip = this.trip;
     if (!['chasing', 'companion'].includes(this.state.phase)) {
@@ -164,6 +174,13 @@ export class DesktopPet {
       // Finishing a meal must not reopen its menu until the pointer leaves her.
       trip.suppressFoodMenu = true;
     }
+    // A pursuing dog can overlap the toolbar. Keep the card's controls usable
+    // while leaving feeding available over the rest of the desktop.
+    if (this.overWidgetCard(cursor)) {
+      trip.menuOpen = false;
+      trip.menuUntil = 0;
+      return false;
+    }
     const hitDog = this.hitsCompanion(cursor);
     const hitMenu = this.hitsFoodMenu(cursor, 5);
     if (!hitDog && !hitMenu) trip.suppressFoodMenu = false;
@@ -176,7 +193,7 @@ export class DesktopPet {
 
   syncPetMouseRegion(cursor) {
     const canInteract = ['chasing', 'companion'].includes(this.state.phase);
-    const hit = canInteract && (this.hitsCompanion(cursor) || this.hitsFoodMenu(cursor, 5));
+    const hit = canInteract && !this.overWidgetCard(cursor) && (this.hitsCompanion(cursor) || this.hitsFoodMenu(cursor, 5));
     for (const surface of this.surfaces.values()) {
       if (surface.win.isDestroyed()) continue;
       const b = surface.win.getBounds();
