@@ -7,7 +7,7 @@ on:
         description: Platforms to build
         type: choice
         options: [mac, win, all]
-        default: mac
+        default: all
       compare_windows_110:
         description: Also check pointer input on the published Windows 1.1.0 portable
         type: boolean
@@ -142,6 +142,25 @@ jobs:
           NIUMA_SMOKE_EXECUTABLE: ${{ steps.mac.outputs.executable || steps.win.outputs.executable }}
           NIUMA_WINDOWS_NATIVE_INPUT: ${{ matrix.target == 'win' && '1' || '' }}
           NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-smoke
+      - name: Verify packaged widget appearance and persistence
+        run: node scripts/smoke-widget-appearance.mjs
+        timeout-minutes: 3
+        env:
+          NIUMA_SMOKE_EXECUTABLE: ${{ steps.mac.outputs.executable || steps.win.outputs.executable }}
+          NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-smoke
+      - name: Verify packaged desktop companion lifecycle
+        run: node scripts/smoke-desktop-companion.mjs
+        timeout-minutes: 4
+        env:
+          NIUMA_SMOKE_EXECUTABLE: ${{ steps.mac.outputs.executable || steps.win.outputs.executable }}
+          NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-smoke
+      - name: Verify packaged feeding with Windows system input
+        if: matrix.target == 'win'
+        run: node scripts/smoke-pet-feeding.mjs
+        timeout-minutes: 4
+        env:
+          NIUMA_SMOKE_EXECUTABLE: ${{ steps.win.outputs.executable }}
+          NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-smoke
       - name: Save native window evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -153,6 +172,11 @@ jobs:
             artifacts/native-widget.png
             artifacts/native-error.png
             artifacts/windows-baseline-result.json
+            artifacts/widget-appearance-native/results.json
+            artifacts/desktop-companion-result.json
+            artifacts/desktop-companion-*.png
+            artifacts/pet-feeding-native-result.json
+            artifacts/pet-feeding-*.png
           if-no-files-found: ignore
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
