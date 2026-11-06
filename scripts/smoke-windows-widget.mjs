@@ -10,6 +10,17 @@ import { expect } from '@playwright/test';
 const run = promisify(execFile);
 const source = fileURLToPath(new URL('../tests/windows/widget-input.cs', import.meta.url));
 
+export async function prepareWindowsDesktop() {
+  assert.equal(process.platform, 'win32');
+  assert.equal(process.env.GITHUB_ACTIONS, 'true');
+  assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted');
+  assert.equal(process.env.NIUMA_WINDOWS_NATIVE_INPUT, '1');
+  // Leave the desktop exposed before launching either package: the runner's
+  // own console can legitimately cover a bottom-layer window.
+  await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    "(New-Object -ComObject Shell.Application).MinimizeAll(); Start-Sleep -Milliseconds 350"], { windowsHide: true });
+}
+
 async function nativePoint(desktop, point) {
   return desktop.evaluate(({ BrowserWindow, screen }, point) => {
     const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('#/widget'));
@@ -138,6 +149,21 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
       await invoke('click', overlap, receiver);
       await expect.poll(() => clicks).toBe(3);
       record('a normal application immediately covers the lowered widget and receives the system click');
+      let trayError;
+      try {
+        const pid = await desktop.evaluate(({ app }) => { app.setAccessibilitySupportEnabled(true); return process.pid; });
+        const { stdout } = await run(tool, ['tray', String(pid), String(receiver)], { windowsHide: true, timeout: 25000 });
+        await expect.poll(() => invoke('hit', overlap)).toBe(String(state.hwnd));
+        await expect(button('将浮窗置底')).toBeVisible();
+        record(stdout.trim() + ' restored topmost order over the independent application');
+        await click(button('将浮窗置底'));
+        await expect.poll(() => invoke('hit', overlap)).toBe(String(receiver));
+      } catch (error) {
+        // Collect the exposed-button result independently, but require BOTH to pass.
+        console.error('Tray recovery:', error);
+        trayError = error;
+        await invoke('escape');
+      }
       const coverAction = action => run(tool, [action, String(receiver), String(cover.pid)], { windowsHide: true });
       await coverAction('hide-cover');
       await click(button('将浮窗置顶'));
@@ -151,18 +177,7 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
       }).toBe(true);
       record('dragging the native card body moves the desktop widget');
 
-      await coverAction('show-cover');
-      const card = await nativePoint(desktop, await center(widget.locator('.widget-middle')));
-      await click(button('将浮窗置底'));
-      await expect.poll(() => invoke('hit', card)).toBe(String(receiver));
-      await invoke('click', card, receiver);
-      await expect.poll(() => clicks).toBe(4);
-      const pid = await desktop.evaluate(({ app }) => { app.setAccessibilitySupportEnabled(true); return process.pid; });
-      const { stdout } = await run(tool, ['tray', String(pid), String(receiver)], { windowsHide: true, timeout: 25000 });
-      console.log(stdout.trim());
-      await expect.poll(() => invoke('hit', card)).toBe(String(state.hwnd));
-      await expect(button('将浮窗置底')).toBeVisible();
-      record(stdout.trim() + ' restored topmost order over the independent application');
+      if (trayError) throw trayError;
     }
   } finally {
     await closeCover();

@@ -59,6 +59,12 @@ class WidgetInput {
     static long Hit(Point p) { return GetAncestor(WindowFromPoint(p), 2).ToInt64(); }
     static uint ProcessOf(IntPtr hwnd) { uint pid; GetWindowThreadProcessId(hwnd, out pid); return pid; }
     static string ClassOf(IntPtr hwnd) { var buf = new StringBuilder(160); GetClassName(hwnd, buf, buf.Capacity); return buf.ToString(); }
+    static string Describe(long handle) {
+        var window = new IntPtr(handle);
+        uint pid = ProcessOf(window);
+        string process = pid == 0 ? "" : Process.GetProcessById((int)pid).ProcessName;
+        return handle + " (" + ClassOf(window) + ", " + process + ", pid=" + pid + ")";
+    }
     static List<IntPtr> WindowsOf(uint pid) {
         var windows = new List<IntPtr>();
         EnumWindows(delegate(IntPtr hwnd, IntPtr unused) {
@@ -203,7 +209,8 @@ class WidgetInput {
             if (hit == expected) break;
             Thread.Sleep(20);
         }
-        if (hit != expected) throw new InvalidOperationException("Native hit " + hit + " at " + point + ", expected " + expected);
+        if (hit != expected) throw new InvalidOperationException("Native hit " + Describe(hit) + " at " + point
+            + ", expected " + Describe(expected) + ", foreground " + Describe(GetForegroundWindow().ToInt64()));
         if (action == "click") {
             Send(Button(2), Button(4));
         } else if (action == "drag") {

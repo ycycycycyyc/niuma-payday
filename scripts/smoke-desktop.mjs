@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect } from '@playwright/test';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 import { macClick, verifyMacWidget } from './smoke-macos-widget.mjs';
-import { verifyWindowsWidget } from './smoke-windows-widget.mjs';
+import { prepareWindowsDesktop, verifyWindowsWidget } from './smoke-windows-widget.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
@@ -31,6 +31,7 @@ const windows = () => desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getA
 
 async function verifyDesktop() {
   if (windowsBaseline) assert.ok(windowsNative, 'Baseline comparisons require real Windows system input');
+  if (windowsNative) await prepareWindowsDesktop();
   desktop = await electron.launch({
     executablePath,
     args: [...(executablePath ? [] : [root]), `--user-data-dir=${userData}`],
