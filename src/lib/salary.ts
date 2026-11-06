@@ -3,7 +3,7 @@ export type { CalendarCache, CalendarYear } from '../../shared/calendar.mjs';
 
 /** All schedules use the computer's local time zone. Currency is display-only. */
 export interface SalarySettings {
-  dailySalary: number;
+  monthlySalary: number;
   currency: 'CNY' | 'HKD' | 'USD';
   startTime: string;
   endTime: string;
@@ -14,11 +14,12 @@ export interface SalarySettings {
   lunchEnabled: boolean;
   lunchStart: string;
   lunchEnd: string;
+  paydayMode: 'last-workday' | 'fixed-day';
   payday: number;
 }
 
 export const DEFAULT_SETTINGS: SalarySettings = {
-  dailySalary: 500,
+  monthlySalary: 10000,
   currency: 'CNY',
   startTime: '09:00',
   endTime: '18:00',
@@ -28,7 +29,8 @@ export const DEFAULT_SETTINGS: SalarySettings = {
   lunchEnabled: false,
   lunchStart: '12:00',
   lunchEnd: '13:00',
-  payday: 10,
+  paydayMode: 'last-workday',
+  payday: 1,
 };
 
 export type SalaryStatus = 'working' | 'break' | 'before' | 'after' | 'off';
@@ -53,8 +55,9 @@ export interface SalarySnapshot {
   calendarNotice: string | null;
   shiftStart: Date | null;
   shiftEnd: Date | null;
-  nextPayday: Date;
-  daysToPayday: number;
+  nextPayday: Date | null;
+  daysToPayday: number | null;
+  paydayEstimated: boolean;
   week: Array<{
     date: Date;
     label: string;
@@ -93,8 +96,8 @@ function scheduleMinutes(settings: SalarySettings) {
 
 export function validateSettings(settings: SalarySettings): Record<string, string> {
   const errors: Record<string, string> = {};
-  if (!Number.isFinite(settings.dailySalary) || settings.dailySalary <= 0 || settings.dailySalary > 1_000_000_000) {
-    errors.dailySalary = '请输入大于 0、且不超过 10 亿元的日薪';
+  if (!Number.isFinite(settings.monthlySalary) || settings.monthlySalary <= 0 || settings.monthlySalary > 1_000_000_000) {
+    errors.monthlySalary = '请输入大于 0、且不超过 10 亿元的月薪';
   }
   if (!['CNY', 'HKD', 'USD'].includes(settings.currency)) errors.currency = '请选择支持的币种';
   if (!['CN', 'HK'].includes(settings.region)) errors.region = '请选择中国大陆或香港';
@@ -103,6 +106,7 @@ export function validateSettings(settings: SalarySettings): Record<string, strin
     || Object.entries(settings.dayOverrides).some(([key, value]) => !isValidDateKey(key) || !['work', 'rest'].includes(value))) {
     errors.dayOverrides = '手动工作日设置无效';
   }
+  if (!['last-workday', 'fixed-day'].includes(settings.paydayMode)) errors.paydayMode = '请选择有效的发薪方式';
   if (!Number.isInteger(settings.payday) || settings.payday < 1 || settings.payday > 31) {
     errors.payday = '发薪日应为 1–31 的整数';
   }
@@ -135,13 +139,39 @@ function calendarDayNumber(date: Date): number {
   return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / (DAY_SECONDS * 1000);
 }
 
-function countWorkingDays(settings: SalarySettings, day: Date, calendar: CalendarCache): number {
-  const end = new Date(day.getFullYear(), day.getMonth() + 1, 0).getDate();
-  let count = 0;
-  for (let date = 1; date <= end; date++) {
-    if (classifyDay(new Date(day.getFullYear(), day.getMonth(), date), settings, calendar).working) count++;
-  }
-  return count;
+interface MonthSchedule {
+  workingDays: number;
+  dailySalary: number;
+  known: boolean;
+  lastWorkday: Date | null;
+}
+
+/** Cache within one calculation only, so calendar/settings edits immediately reprice it. */
+function createMonthResolver(settings: SalarySettings, calendar: CalendarCache) {
+  const months = new Map<string, MonthSchedule>();
+  return (day: Date): MonthSchedule => {
+    const year = day.getFullYear();
+    const month = day.getMonth();
+    const key = `${year}-${month}`;
+    const cached = months.get(key);
+    if (cached) return cached;
+    const end = new Date(year, month + 1, 0).getDate();
+    let workingDays = 0;
+    let known = true;
+    let lastWorkday: Date | null = null;
+    for (let date = 1; date <= end; date++) {
+      const anchor = new Date(year, month, date);
+      const classification = classifyDay(anchor, settings, calendar);
+      known &&= classification.known;
+      if (classification.working) {
+        workingDays++;
+        lastWorkday = anchor;
+      }
+    }
+    const result = { workingDays, dailySalary: workingDays ? settings.monthlySalary / workingDays : 0, known, lastWorkday };
+    months.set(key, result);
+    return result;
+  };
 }
 
 interface Shift {
@@ -154,7 +184,7 @@ interface Shift {
   dailySalary: number;
 }
 
-function makeShift(settings: SalarySettings, anchor: Date): Shift {
+function makeShift(settings: SalarySettings, anchor: Date, dailySalary: number): Shift {
   const values = scheduleMinutes(settings);
   const start = atMinutes(anchor, values.start);
   const end = atMinutes(anchor, values.end);
@@ -169,7 +199,7 @@ function makeShift(settings: SalarySettings, anchor: Date): Shift {
     lunchStart,
     lunchEnd,
     totalPaidSeconds,
-    dailySalary: settings.dailySalary,
+    dailySalary,
   };
 }
 
@@ -191,15 +221,24 @@ function earnedAt(shift: Shift, now: Date): number {
   return shift.dailySalary * (paidSeconds(shift, now) / shift.totalPaidSeconds);
 }
 
-function nextPayDate(settings: SalarySettings, now: Date): Date {
+function nextPayDate(settings: SalarySettings, now: Date, monthFor: ReturnType<typeof createMonthResolver>) {
   const year = now.getFullYear();
   const month = now.getMonth();
-  const candidate = (monthOffset: number) => {
-    const lastDay = new Date(year, month + monthOffset + 1, 0).getDate();
-    return new Date(year, month + monthOffset, Math.min(settings.payday, lastDay));
-  };
-  const current = candidate(0);
-  return calendarDayNumber(current) >= calendarDayNumber(now) ? current : candidate(1);
+  let estimated = false;
+  for (let offset = 0; offset < 24; offset++) {
+    const firstDay = new Date(year, month + offset, 1);
+    let candidate: Date | null;
+    if (settings.paydayMode === 'last-workday') {
+      const schedule = monthFor(firstDay);
+      estimated ||= !schedule.known;
+      candidate = schedule.lastWorkday;
+    } else {
+      const lastDay = new Date(year, month + offset + 1, 0).getDate();
+      candidate = new Date(year, month + offset, Math.min(settings.payday, lastDay));
+    }
+    if (candidate && calendarDayNumber(candidate) >= calendarDayNumber(now)) return { date: candidate, estimated };
+  }
+  return { date: null, estimated };
 }
 
 /** Earnings attributable to an interval, for a paid-break timer; lunch/off-hours add zero. */
@@ -210,20 +249,21 @@ export function earningsBetween(settings: SalarySettings, start: Date, end: Date
   if (end <= start) return 0;
   const days = calendarDayNumber(end) - calendarDayNumber(start);
   if (days > 3660) throw new RangeError('单次计时不能超过 10 年');
+  const monthFor = createMonthResolver(settings, calendar);
   let total = 0;
   // Include the preceding day's shift because an interval can start after midnight.
   for (let offset = -1; offset <= days; offset++) {
     const anchor = localDay(start, offset);
     if (!classifyDay(anchor, settings, calendar).working) continue;
-    const shift = makeShift(settings, anchor);
+    const shift = makeShift(settings, anchor, monthFor(anchor).dailySalary);
     total += Math.max(0, earnedAt(shift, end) - earnedAt(shift, start));
   }
   return total;
 }
 
 /**
- * Estimate earnings from the schedule, not a timer or attendance log. Each scheduled
- * day earns the entered daily salary. Overnight earnings belong to the shift's start
+ * Estimate earnings from the schedule, not a timer or attendance log. Monthly salary
+ * is shared by that month's scheduled days. Overnight earnings use the shift's start
  * date; monthEarned sums only shifts starting in the current month. Missing calendars
  * use weekdays with a notice. Reopening/sleep never loses accrued scheduled earnings.
  */
@@ -232,16 +272,17 @@ export function calculateSalary(settings: SalarySettings, now: Date, calendar: C
   if (Object.keys(errors).length > 0) throw new RangeError(Object.values(errors)[0]);
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new RangeError('当前时间无效');
 
+  const monthFor = createMonthResolver(settings, calendar);
+  const shiftFor = (day: Date) => makeShift(settings, day, monthFor(day).dailySalary);
   const today = localDay(now);
   const yesterday = localDay(now, -1);
-  const yesterdayShift = classifyDay(yesterday, settings, calendar).working ? makeShift(settings, yesterday) : null;
+  const yesterdayShift = classifyDay(yesterday, settings, calendar).working ? shiftFor(yesterday) : null;
   // At an overnight shift's exact end, use today's schedule/status.
   const previousIsActive = yesterdayShift !== null && now >= yesterdayShift.start && now < yesterdayShift.end;
   const anchor = previousIsActive ? yesterday : today;
   const selected = previousIsActive ? yesterdayShift :
-    classifyDay(today, settings, calendar).working ? makeShift(settings, today) : null;
+    classifyDay(today, settings, calendar).working ? shiftFor(today) : null;
   const selectedDay = classifyDay(anchor, settings, calendar);
-  const currentDay = classifyDay(today, settings, calendar);
 
   let status: SalaryStatus = 'off';
   if (selected) {
@@ -251,14 +292,16 @@ export function calculateSalary(settings: SalarySettings, now: Date, calendar: C
     else status = 'working';
   }
 
-  const workingDaysInMonth = countWorkingDays(settings, today, calendar);
+  const currentMonth = monthFor(today);
+  const workingDaysInMonth = currentMonth.workingDays;
+  let earningsEstimated = !currentMonth.known || !monthFor(anchor).known;
   let monthEarned = 0;
   let completedWorkdays = 0;
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   for (let date = 1; date <= daysInMonth; date++) {
     const dateAnchor = new Date(now.getFullYear(), now.getMonth(), date);
     if (!classifyDay(dateAnchor, settings, calendar).working) continue;
-    const shift = makeShift(settings, dateAnchor);
+    const shift = shiftFor(dateAnchor);
     monthEarned += earnedAt(shift, now);
     if (now >= shift.end) completedWorkdays++;
   }
@@ -267,7 +310,8 @@ export function calculateSalary(settings: SalarySettings, now: Date, calendar: C
   const monday = localDay(anchor, -((anchor.getDay() + 6) % 7));
   const week = Array.from({ length: 7 }, (_, index) => {
     const date = localDay(monday, index);
-    const shift = classifyDay(date, settings, calendar).working ? makeShift(settings, date) : null;
+    const shift = classifyDay(date, settings, calendar).working ? shiftFor(date) : null;
+    if (shift && now > shift.start) earningsEstimated ||= !monthFor(date).known;
     return {
       date,
       label: WEEKDAY_LABELS[date.getDay()],
@@ -279,15 +323,20 @@ export function calculateSalary(settings: SalarySettings, now: Date, calendar: C
 
   const elapsedPaidSeconds = selected ? paidSeconds(selected, now) : 0;
   const totalPaidSeconds = selected?.totalPaidSeconds ?? 0;
-  const dailySalary = settings.dailySalary;
+  const dailySalary = selected?.dailySalary ?? currentMonth.dailySalary;
   // Retain an informative nominal rate on a rest day, without accruing any earnings.
-  const referenceSeconds = selected?.totalPaidSeconds ?? makeShift(settings, today).totalPaidSeconds;
+  const referenceSeconds = selected?.totalPaidSeconds ?? shiftFor(today).totalPaidSeconds;
   const perSecond = referenceSeconds > 0 ? dailySalary / referenceSeconds : 0;
-  const nextPayday = nextPayDate(settings, now);
+  const payday = nextPayDate(settings, now, monthFor);
+  const notices: string[] = [];
+  if (earningsEstimated || payday.estimated) notices.push('部分日期的假日日历尚未确认，收入或发薪日暂按周一至周五估算；可更新日历或手动设置上班、休息。');
+  if (!workingDaysInMonth) notices.push('本月无工作日，月薪暂不分摊，增长为 0。');
+  if (!payday.date) notices.push('未来 24 个月内无可用工作日，暂无法确定发薪日。');
 
   return {
     todayEarned: selected ? earnedAt(selected, now) : 0,
-    monthEarned: Math.max(0, monthEarned),
+    monthEarned: workingDaysInMonth > 0 && completedWorkdays === workingDaysInMonth
+      ? settings.monthlySalary : Math.max(0, Math.min(settings.monthlySalary, monthEarned)),
     dailySalary,
     hourlyRate: perSecond * 3600,
     perSecond,
@@ -300,12 +349,12 @@ export function calculateSalary(settings: SalarySettings, now: Date, calendar: C
     status,
     statusLabel: STATUS_LABELS[status],
     dayReason: selectedDay.reason,
-    calendarNotice: !selectedDay.known || !currentDay.known
-      ? '假日日历尚未确认，暂按周一至周五估算；可手动设置今天上班或休息。' : null,
+    calendarNotice: notices.length ? notices.join(' ') : null,
     shiftStart: selected?.start ?? null,
     shiftEnd: selected?.end ?? null,
-    nextPayday,
-    daysToPayday: calendarDayNumber(nextPayday) - calendarDayNumber(now),
+    nextPayday: payday.date,
+    daysToPayday: payday.date ? calendarDayNumber(payday.date) - calendarDayNumber(now) : null,
+    paydayEstimated: payday.estimated,
     week,
   };
 }

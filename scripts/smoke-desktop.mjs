@@ -52,31 +52,31 @@ async function verifyDesktop() {
   assert.equal(fs.realpathSync.native(paths.sessionData), fs.realpathSync.native(userData));
   record('isolated userData/sessionData and native main window');
 
-  await main.getByRole('button', { name: '设置我的日薪', exact: true }).click();
-  await main.getByLabel('日薪', { exact: true }).fill('680');
+  await main.getByRole('button', { name: '设置我的月薪', exact: true }).click();
+  await main.getByLabel('月薪', { exact: true }).fill('680');
   await main.getByLabel('上班时间', { exact: true }).fill('09:00');
   await main.getByLabel('下班时间', { exact: true }).fill('18:00');
   await main.getByRole('button', { name: '保存并开始计薪', exact: true }).click();
   await expect(main.getByRole('dialog')).toHaveCount(0);
   const saved = await main.evaluate(() => window.niuma.getState());
-  assert.equal(saved.version, 2);
+  assert.equal(saved.version, 3);
   assert.equal(saved.configured, true);
-  assert.equal(saved.settings.dailySalary, 680);
+  assert.equal(saved.settings.monthlySalary, 680);
   assert.equal(saved.settings.startTime, '09:00');
   assert.equal(saved.settings.endTime, '18:00');
   await expect(main.locator('.page-heading p, .stat-card p')).toHaveCount(0);
-  await expect(main.locator('.stat-label')).toHaveText(['本月已赚', '距离下班', '下次发薪日']);
+  await expect(main.locator('.stat-label')).toHaveText(['本月已赚', '距离下班', /下次发薪日/]);
   await expect(main.locator('.track-caption')).toHaveText('全时段计薪');
   await expect(main.locator('.calendar-status')).not.toContainText(/已更新|已缓存/);
   record('dashboard retains the three primary values without redundant captions or calendar success text');
   const invalid = await main.evaluate(async () => {
     const state = await window.niuma.getState();
-    try { await window.niuma.setState({ ...state, settings: { ...state.settings, dailySalary: -1 } }); return 'accepted'; }
+    try { await window.niuma.setState({ ...state, settings: { ...state.settings, monthlySalary: -1 } }); return 'accepted'; }
     catch (error) { return error.message; }
   });
   assert.match(invalid, /\[SETTINGS_INVALID\]/);
-  assert.equal((await main.evaluate(() => window.niuma.getState())).settings.dailySalary, 680);
-  record('daily salary form saves through authorized IPC; invalid settings rejected');
+  assert.equal((await main.evaluate(() => window.niuma.getState())).settings.monthlySalary, 680);
+  record('monthly salary form saves through authorized IPC; invalid settings rejected');
 
   const appRoot = await desktop.evaluate(({ app }) => app.getAppPath());
   const unauthorized = await desktop.evaluate(async ({ BrowserWindow }, preload) => {
@@ -181,7 +181,7 @@ async function verifyDesktop() {
   assert.equal((await widget.evaluate(() => window.niuma.getState())).privacy, true);
   const disk = JSON.parse(fs.readFileSync(path.join(userData, 'state.json'), 'utf8'));
   assert.equal(disk.privacy, true);
-  assert.equal(disk.settings.dailySalary, 680);
+  assert.equal(disk.settings.monthlySalary, 680);
   record('restore hides widget; privacy synchronizes to both windows and persists');
 
   await main.evaluate(() => window.niuma.showWidget());
@@ -206,7 +206,7 @@ async function verifyDesktop() {
   await main.getByRole('button', { name: '收起到托盘', exact: true }).click();
   await expect.poll(async () => (await readMainWindow())?.visible).toBe(false);
   assert.equal(child.exitCode, null);
-  assert.equal((await main.evaluate(() => window.niuma.getState())).settings.dailySalary, 680);
+  assert.equal((await main.evaluate(() => window.niuma.getState())).settings.monthlySalary, 680);
   record('widget hide works; closing main keeps application running in tray');
   assert.deepEqual(failures, []);
 }

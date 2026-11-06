@@ -27,7 +27,7 @@ try {
     if (!fits) process.exitCode = 1;
   }
   await page.setViewportSize({ width: 1240, height: 840 });
-  await page.getByRole('button', { name: '设置我的日薪' }).click();
+  await page.getByRole('button', { name: '设置我的月薪' }).click();
   await page.screenshot({ path: 'artifacts/settings.png' });
   await page.getByRole('button', { name: '关闭设置' }).click();
   await page.getByRole('button', { name: '开启悬浮窗' }).click();

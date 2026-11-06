@@ -1,24 +1,28 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowUpRight, CalendarDays, Info, Sparkles, X } from 'lucide-react';
-import { validateSettings, type SalarySettings } from '../lib/salary';
+import { calculateSalary, validateSettings, type CalendarCache, type SalarySettings } from '../lib/salary';
+import { currencySymbol, money } from '../lib/clock';
 import { describeDesktopError } from '../lib/desktop-error';
 import './settings.css';
 
 interface SettingsModalProps {
   settings: SalarySettings;
+  calendar: CalendarCache;
   onSave: (settings: SalarySettings) => Promise<void> | void;
   onClose: () => void;
 }
 
-export default function SettingsModal({ settings, onSave, onClose }: SettingsModalProps) {
+export default function SettingsModal({ settings, calendar, onSave, onClose }: SettingsModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const advancedRef = useRef<HTMLDetailsElement>(null);
   const saveErrorRef = useRef<HTMLParagraphElement>(null);
   const [draft, setDraft] = useState<SalarySettings>(() => ({ ...settings, dayOverrides: { ...settings.dayOverrides } }));
+  const [paydayChoice, setPaydayChoice] = useState(() => settings.paydayMode === 'last-workday' ? 'last-workday' : settings.payday === 1 ? 'first-day' : 'custom');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState('');
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
+  const preview = Object.keys(validateSettings(draft)).length === 0 ? calculateSalary(draft, new Date(), calendar) : null;
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -54,7 +58,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
     const nextErrors = validateSettings(draft);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) {
-      if (['lunchEnabled', 'lunchStart', 'lunchEnd', 'payday'].some(key => nextErrors[key]) && advancedRef.current) {
+      if (['lunchEnabled', 'lunchStart', 'lunchEnd'].some(key => nextErrors[key]) && advancedRef.current) {
         advancedRef.current.open = true;
       }
       requestAnimationFrame(() => dialogRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
@@ -89,17 +93,17 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
           <div className="settings-eyebrow"><Sparkles size={14} aria-hidden="true" /> YOUR WORK, YOUR WORTH</div>
           <button className="settings-close" type="button" aria-label="关闭设置" onClick={onClose} disabled={busy}><X size={20} /></button>
           <h2 id="settings-title">一天的努力，值多少？</h2>
-          <p id="settings-description">填好日薪和上下班时间，剩下的交给我们。</p>
+          <p id="settings-description">填好月薪，按当月工作日自动分摊每一秒的收入。</p>
         </header>
 
         <div className="settings-body">
           <fieldset className="settings-section" disabled={busy}>
-            <legend><span>01</span> 每日工资</legend>
+            <legend><span>01</span> 每月工资</legend>
             <div className="settings-grid settings-salary-grid">
               <div className="settings-field">
-                <label htmlFor="settings-dailySalary">日薪</label>
-                <input id="settings-dailySalary" autoFocus type="number" inputMode="decimal" min="0.01" max="1000000000" step="0.01" value={Number.isFinite(draft.dailySalary) ? draft.dailySalary : ''} onChange={event => update('dailySalary', event.target.valueAsNumber)} {...fieldAccessibility('dailySalary')} />
-                {errorFor('dailySalary')}
+                <label htmlFor="settings-monthlySalary">月薪</label>
+                <input id="settings-monthlySalary" autoFocus type="number" inputMode="decimal" min="0.01" max="1000000000" step="0.01" value={Number.isFinite(draft.monthlySalary) && draft.monthlySalary > 0 ? draft.monthlySalary : ''} onChange={event => update('monthlySalary', event.target.valueAsNumber)} {...fieldAccessibility('monthlySalary')} />
+                {errorFor('monthlySalary')}
               </div>
               <div className="settings-field">
                 <label htmlFor="settings-currency">币种</label>
@@ -109,6 +113,8 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
                 {errorFor('currency')}
               </div>
             </div>
+            <p className="settings-hint settings-shift-hint">币种只影响金额显示，节假日地区可独立选择。</p>
+            {preview && <p className="schedule-summary" aria-live="polite">本月 {preview.workingDaysInMonth} 个工作日 · 参考日薪 {currencySymbol(draft.currency)}{money(preview.dailySalary)}。{preview.workingDaysInMonth === 0 ? '本月没有工作日，收入暂停增长。' : '月薪按工作日均分，工作时段内实时增长。'}{preview.calendarNotice && ' 日历暂缺时按周一至周五估算。'}</p>}
           </fieldset>
 
           <fieldset className="settings-section" disabled={busy}>
@@ -131,6 +137,7 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
                 <option value="CN">中国大陆</option><option value="HK">中国香港</option>
               </select>
               {errorFor('region')}
+              <span className="settings-hint">例如：工资选 HKD，假期仍可选中国大陆。</span>
             </div>
             <p className="schedule-summary">周一至周五自动计薪，公共假日休息。周末（含调休补班）默认不开启，需要时在首页点「今天上班」。</p>
             <div className="settings-lunch">
@@ -143,10 +150,34 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
             </div>
           </fieldset>
 
+          <fieldset className="settings-section" disabled={busy}>
+            <legend><span>03</span> 发薪安排</legend>
+            <div className="settings-field">
+              <label htmlFor="settings-paydayMode"><CalendarDays size={15} aria-hidden="true" /> 发薪方式</label>
+              <select id="settings-paydayMode" value={paydayChoice} onChange={event => {
+                const choice = event.target.value;
+                setPaydayChoice(choice);
+                update('paydayMode', choice === 'last-workday' ? 'last-workday' : 'fixed-day');
+                if (choice === 'first-day' || (choice === 'last-workday' && (!Number.isInteger(draft.payday) || draft.payday < 1 || draft.payday > 31))) update('payday', 1);
+              }} {...fieldAccessibility('paydayMode')}>
+                <option value="last-workday">每月最后一个工作日（默认）</option>
+                <option value="first-day">每月 1 日</option>
+                <option value="custom">自定义日期</option>
+              </select>
+              {errorFor('paydayMode')}
+              {paydayChoice === 'custom' && <>
+                <label htmlFor="settings-payday">每月发薪日</label>
+                <div className="settings-payday-input"><span>每月</span><input id="settings-payday" type="number" inputMode="numeric" min="1" max="31" step="1" value={Number.isFinite(draft.payday) ? draft.payday : ''} onChange={event => update('payday', event.target.valueAsNumber)} {...fieldAccessibility('payday')} /><span>日</span></div>
+              </>}
+              {errorFor('payday')}
+              <span className="settings-hint">最后工作日跟随所选日历和手动安排；固定日期不因假日顺延，小月没有该日期时取月末。仅用于发薪倒计时。</span>
+            </div>
+          </fieldset>
+
           <details ref={advancedRef} className="advanced-settings">
-            <summary>更多偏好 · 午休与发薪日</summary>
+            <summary>更多偏好 · 午休</summary>
             <fieldset className="settings-section" disabled={busy}>
-              <legend className="sr-only">午休与发薪日</legend>
+              <legend className="sr-only">午休安排</legend>
               <div className="settings-lunch">
                 <label className="settings-toggle-label" htmlFor="settings-lunchEnabled">
                   <span><strong>午休暂停增长</strong><small>日薪不变，分摊到午休以外的工作时间</small></span>
@@ -158,12 +189,6 @@ export default function SettingsModal({ settings, onSave, onClose }: SettingsMod
                   <div className="settings-field"><label htmlFor="settings-lunchStart">午休开始</label><input id="settings-lunchStart" type="time" value={draft.lunchStart} onChange={event => update('lunchStart', event.target.value)} {...fieldAccessibility('lunchStart')} />{errorFor('lunchStart')}</div>
                   <div className="settings-field"><label htmlFor="settings-lunchEnd">午休结束</label><input id="settings-lunchEnd" type="time" value={draft.lunchEnd} onChange={event => update('lunchEnd', event.target.value)} {...fieldAccessibility('lunchEnd')} />{errorFor('lunchEnd')}</div>
                 </div>}
-              </div>
-              <div className="settings-field settings-payday">
-                <label htmlFor="settings-payday"><CalendarDays size={15} aria-hidden="true" /> 每月发薪日</label>
-                <div className="settings-payday-input"><span>每月</span><input id="settings-payday" type="number" inputMode="numeric" min="1" max="31" step="1" value={Number.isFinite(draft.payday) ? draft.payday : ''} onChange={event => update('payday', event.target.valueAsNumber)} {...fieldAccessibility('payday')} /><span>日</span></div>
-                {errorFor('payday')}
-                <span className="settings-hint">仅用于发薪倒计时；当月没有这一天时按月末计算。</span>
               </div>
               <p className="settings-hint settings-shift-hint">下班早于上班时，按跨夜班次计算。时间跟随电脑本地时区。</p>
             </fieldset>

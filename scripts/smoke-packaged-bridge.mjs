@@ -2,7 +2,7 @@
  * Exercise the released preload, main module, sender guard and state file with
  * simulated Electron windows, frame handles and IPC transport.
  * Requires Node >=22.15 and installed dev dependencies.
- * node scripts/smoke-packaged-bridge.mjs [path/to/app.asar]
+ * node scripts/smoke-packaged-bridge.mjs [--transport-only] [path/to/app.asar]
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -18,6 +18,7 @@ import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 
 const originalCwd = process.cwd();
 const archiveArg = process.argv.slice(2).find(value => !value.startsWith('--'));
+const transportOnly = process.argv.includes('--transport-only');
 const archive = path.resolve(archiveArg ?? 'release/win-unpacked/resources/app.asar');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'niuma-packaged-bridge-'));
 const root = path.join(work, '测试 空格', 'resources', 'app.asar');
@@ -304,20 +305,40 @@ globalThis.fetch = async () => new Response('offline fixture', { status: 503 });
 try {
   const oldCardPosition = { x: 260, y: 310 };
   fs.writeFileSync(path.join(profile, 'desktop.json'), JSON.stringify({ widgetPosition: oldCardPosition }));
+  fs.writeFileSync(path.join(profile, 'state.json'), JSON.stringify({
+    version: 2, configured: true, privacy: true, goal: { name: '原有目标', amount: 80 }, calendar: {},
+    settings: {
+      dailySalary: 680, currency: 'HKD', region: 'CN', startTime: '08:30', endTime: '18:00',
+      autoWidget: false, lunchEnabled: false, lunchStart: '12:00', lunchEnd: '13:00', payday: 15,
+      dayOverrides: { '2026-11-07': 'rest' },
+    },
+  }));
   await import(mainURL);
   await Promise.resolve();
   const api = windows[0].bridge;
-  await api.getState();
+  const migrated = await api.getState();
+  assert.equal(migrated.version, 3);
+  assert.equal(migrated.configured, false);
+  assert.equal(migrated.settings.monthlySalary, 0);
+  assert.equal(migrated.settings.currency, 'HKD');
+  assert.equal(migrated.settings.region, 'CN');
+  assert.equal(migrated.settings.startTime, '08:30');
+  assert.equal(migrated.settings.paydayMode, 'fixed-day');
+  assert.equal(migrated.settings.payday, 15);
+  assert.equal(migrated.settings.dayOverrides['2026-11-07'], 'rest');
+  assert.equal(migrated.goal.name, '原有目标');
+  assert.equal(migrated.privacy, true);
+  pass('packaged main migrates the old daily profile before validation and keeps HKD with mainland holidays');
   pass('packaged preload reads state through actual IPC guard with distinct same-frame wrappers');
 
   const state = {
-    version: 2,
+    version: 3,
     configured: true,
     privacy: false,
     goal: { name: '咖啡', amount: 25 },
     settings: {
-      dailySalary: 680,
-      currency: 'CNY',
+      monthlySalary: 680,
+      currency: 'HKD',
       region: 'CN',
       startTime: '09:00',
       endTime: '18:00',
@@ -325,17 +346,18 @@ try {
       lunchEnabled: false,
       lunchStart: '12:00',
       lunchEnd: '13:00',
+      paydayMode: 'fixed-day',
       payday: 10,
       dayOverrides: {},
     },
   };
   await api.setState(state);
-  assert.equal((await api.getState()).settings.dailySalary, 680);
+  assert.equal((await api.getState()).settings.monthlySalary, 680);
   const saved = JSON.parse(fs.readFileSync(path.join(profile, 'state.json'), 'utf8'));
   assert.equal(saved.settings.startTime, '09:00');
-  pass('actual packaged main handler persists daily salary and working hours on disk');
+  pass('actual packaged main handler persists monthly salary and working hours on disk');
 
-  await assert.rejects(api.setState({ ...state, settings: { ...state.settings, dailySalary: -1 } }));
+  await assert.rejects(api.setState({ ...state, settings: { ...state.settings, monthlySalary: -1 } }));
   const childFrame = frameFor(windows[0], true);
   const childEvent = {
     sender: windows[0].webContents,
@@ -348,118 +370,125 @@ try {
   await assert.rejects(async () => protectedRead({ ...childEvent, sender: new EventEmitter() }));
   pass('invalid salary, child-frame caller, and foreign window rejected');
 
-  await api.showWidget();
-  assert.equal(windows.length, 2);
-  const widgetApi = windows[1].bridge;
-  const hasLayerControls = typeof widgetApi.setWidgetLayer === 'function';
-  const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
-  if (!['1.0.0', '1.0.1'].includes(releaseVersion)) {
-    const widget = windows[1];
-    const bounds = widget.getBounds();
-    assert.deepEqual(bounds, {
-      width: widgetLayout.width, height: widgetLayout.cardHeight + widgetLayout.laneHeight,
-      x: oldCardPosition.x, y: oldCardPosition.y - widgetLayout.laneHeight,
-    });
-    screen.emit('display-metrics-changed');
-    assert.deepEqual(widget.getBounds(), bounds);
-    if (process.platform === 'win32' || process.platform === 'darwin') {
-      cursor = { x: bounds.x + 40, y: bounds.y + widgetLayout.laneHeight - 1 };
-      await new Promise(resolve => setTimeout(resolve, 70));
-      assert.equal(widget.mouseIgnored, true);
-      cursor.y++;
-      await new Promise(resolve => setTimeout(resolve, 70));
-      assert.equal(widget.mouseIgnored, false);
-      pass('packaged widget passes pet-lane clicks through and restores card hit testing without DOM mouse events');
-      if (widgetApi.setWidgetPet) {
-        const settlePointer = () => new Promise(resolve => setTimeout(resolve, 70));
-        const pet = { left: 46, top: 8, width: 60, height: 58, chasing: false };
-        const points = [];
-        const off = widgetApi.onWidgetPointer(point => points.push(point));
-        cursor = { x: bounds.x + 76, y: bounds.y + 37 };
-        api.setWidgetPet({ ...pet, chasing: true });
-        ipcMain.emit('niuma:set-widget-pet', { sender: widget.webContents, senderFrame: frameFor(widget, true) }, { ...pet, chasing: true });
-        widgetApi.setWidgetPet({ ...pet, top: NaN, chasing: true });
-        await settlePointer();
+  let hasLayerControls = false;
+  if (!transportOnly) {
+    await api.showWidget();
+    assert.equal(windows.length, 2);
+    const widgetApi = windows[1].bridge;
+    hasLayerControls = typeof widgetApi.setWidgetLayer === 'function';
+    const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+    if (!['1.0.0', '1.0.1'].includes(releaseVersion)) {
+      const widget = windows[1];
+      const bounds = widget.getBounds();
+      assert.deepEqual(bounds, {
+        width: widgetLayout.width, height: widgetLayout.cardHeight + widgetLayout.laneHeight,
+        x: oldCardPosition.x, y: oldCardPosition.y - widgetLayout.laneHeight,
+      });
+      screen.emit('display-metrics-changed');
+      assert.deepEqual(widget.getBounds(), bounds);
+      if (process.platform === 'win32' || process.platform === 'darwin') {
+        cursor = { x: bounds.x + 40, y: bounds.y + widgetLayout.laneHeight - 1 };
+        await new Promise(resolve => setTimeout(resolve, 70));
         assert.equal(widget.mouseIgnored, true);
-        assert.equal(points.length, 0);
-        widgetApi.setWidgetPet(pet);
-        await settlePointer();
+        cursor.y++;
+        await new Promise(resolve => setTimeout(resolve, 70));
         assert.equal(widget.mouseIgnored, false);
-        cursor = { x: bounds.x + pet.left, y: bounds.y + pet.top };
-        await settlePointer();
-        assert.equal(widget.mouseIgnored, true);
-        assert.equal(points.length, 0);
-        widgetApi.setWidgetPet({ ...pet, chasing: true });
-        assert.deepEqual(points, [{ x: pet.left, y: pet.top }]);
-        cursor = { x: bounds.x - 240, y: bounds.y + bounds.height + 20 };
-        await settlePointer();
-        assert.deepEqual(points.at(-1), { x: -240, y: bounds.height + 20 });
-        assert.equal(points.length, 2);
-        await widgetApi.hideWidget();
-        widgetApi.setWidgetPet({ ...pet, chasing: true });
-        await api.showWidget();
-        cursor.x += 40;
-        await settlePointer();
-        assert.equal(points.length, 2);
-        off();
-        pass('only the dog captures clicks; chase receives distinct widget-local cursor positions including outside, and stops on hide');
+        pass('packaged widget passes pet-lane clicks through and restores card hit testing without DOM mouse events');
+        if (widgetApi.setWidgetPet) {
+          const settlePointer = () => new Promise(resolve => setTimeout(resolve, 70));
+          const pet = { left: 46, top: 8, width: 60, height: 58, chasing: false };
+          const points = [];
+          const off = widgetApi.onWidgetPointer(point => points.push(point));
+          cursor = { x: bounds.x + 76, y: bounds.y + 37 };
+          api.setWidgetPet({ ...pet, chasing: true });
+          ipcMain.emit('niuma:set-widget-pet', { sender: widget.webContents, senderFrame: frameFor(widget, true) }, { ...pet, chasing: true });
+          widgetApi.setWidgetPet({ ...pet, top: NaN, chasing: true });
+          await settlePointer();
+          assert.equal(widget.mouseIgnored, true);
+          assert.equal(points.length, 0);
+          widgetApi.setWidgetPet(pet);
+          await settlePointer();
+          assert.equal(widget.mouseIgnored, false);
+          cursor = { x: bounds.x + pet.left, y: bounds.y + pet.top };
+          await settlePointer();
+          assert.equal(widget.mouseIgnored, true);
+          assert.equal(points.length, 0);
+          widgetApi.setWidgetPet({ ...pet, chasing: true });
+          assert.deepEqual(points, [{ x: pet.left, y: pet.top }]);
+          cursor = { x: bounds.x - 240, y: bounds.y + bounds.height + 20 };
+          await settlePointer();
+          assert.deepEqual(points.at(-1), { x: -240, y: bounds.height + 20 });
+          assert.equal(points.length, 2);
+          await widgetApi.hideWidget();
+          widgetApi.setWidgetPet({ ...pet, chasing: true });
+          await api.showWidget();
+          cursor.x += 40;
+          await settlePointer();
+          assert.equal(points.length, 2);
+          off();
+          pass('only the dog captures clicks; chase receives distinct widget-local cursor positions including outside, and stops on hide');
+        }
       }
+      pass('floating window preserves the legacy card position across display changes');
     }
-    pass('floating window preserves the legacy card position across display changes');
+    if (hasLayerControls) {
+      const widget = windows[1];
+      const bottomArgs = process.platform === 'darwin' ? [true, 'normal', -1] : [false];
+      assert.equal(await widgetApi.getWidgetLayer(), 'top');
+      assert.deepEqual(widget.nativeLayerArgs, [true, 'floating']);
+      const layers = [];
+      const stopListening = widgetApi.onWidgetLayerChanged(layer => layers.push(layer));
+      widget.webContents.emit('did-finish-load');
+      await assert.rejects(widgetApi.setWidgetLayer('unknown'));
+      const changeLayer = handlers.get('niuma:set-widget-layer');
+      await assert.rejects(async () => changeLayer(childEvent, 'bottom'));
+      await assert.rejects(async () => changeLayer({ ...childEvent, sender: new EventEmitter() }, 'bottom'));
+      assert.equal(await widgetApi.setWidgetLayer('bottom'), 'bottom');
+      assert.deepEqual(widget.nativeLayerArgs, bottomArgs);
+      if (process.platform === 'win32' && fs.existsSync(path.join(root, 'electron/windows-widget-layer.mjs'))) {
+        assert.equal(widget.lowered, true);
+        assert.equal(widget.focusable, false);
+      }
+      assert.deepEqual(layers, ['top', 'bottom']);
+      assert.equal(await api.getWidgetLayer(), 'bottom');
+      const recover = trayMenu.find(item => item.label === '将浮窗置顶').click;
+      if (process.platform === 'darwin') {
+        const windowMenu = applicationMenu.find(item => item.label === '窗口').submenu;
+        assert.equal(windowMenu.find(item => item.label === '将浮窗置顶').click, recover);
+      }
+      await widgetApi.hideWidget();
+      await recover();
+      assert.equal(widget.isVisible(), true);
+      assert.equal(await widgetApi.getWidgetLayer(), 'top');
+      assert.deepEqual(widget.nativeLayerArgs, [true, 'floating']);
+      if (widget.lowered) {
+        assert.equal(widget.focusable, true);
+        assert.equal(widget.skipTaskbar, true);
+      }
+      assert.deepEqual(layers, ['top', 'bottom', 'top']);
+      stopListening();
+      await widgetApi.setWidgetLayer('bottom');
+      assert.deepEqual(layers, ['top', 'bottom', 'top']);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'desktop.json'), 'utf8')).widgetLayer, 'bottom');
+      pass('legacy settings default to top; guarded layer changes and menu recovery stay synchronized');
+    }
+    assert.equal((await widgetApi.getState()).settings.monthlySalary, 680);
+    let received = null;
+    const unsubscribe = widgetApi.onStateChanged(value => {
+      received = value;
+    });
+    await api.setState({ ...state, privacy: true });
+    assert.equal(received?.privacy, true);
+    unsubscribe();
+    await widgetApi.restoreMain();
+    assert.equal(windows[0].isMinimized(), false);
+    assert.equal(windows[1].isVisible(), false);
+    pass('packaged widget bridge can read state, receive actual main broadcasts and request restoration');
+  } else {
+    await api.setState({ ...state, privacy: true });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'state.json'), 'utf8')).privacy, true);
+    pass('monthly profile and privacy persist through guarded IPC without simulated native pet surfaces');
   }
-  if (hasLayerControls) {
-    const widget = windows[1];
-    const bottomArgs = process.platform === 'darwin' ? [true, 'normal', -1] : [false];
-    assert.equal(await widgetApi.getWidgetLayer(), 'top');
-    assert.deepEqual(widget.nativeLayerArgs, [true, 'floating']);
-    const layers = [];
-    const stopListening = widgetApi.onWidgetLayerChanged(layer => layers.push(layer));
-    widget.webContents.emit('did-finish-load');
-    await assert.rejects(widgetApi.setWidgetLayer('unknown'));
-    const changeLayer = handlers.get('niuma:set-widget-layer');
-    await assert.rejects(async () => changeLayer(childEvent, 'bottom'));
-    await assert.rejects(async () => changeLayer({ ...childEvent, sender: new EventEmitter() }, 'bottom'));
-    assert.equal(await widgetApi.setWidgetLayer('bottom'), 'bottom');
-    assert.deepEqual(widget.nativeLayerArgs, bottomArgs);
-    if (process.platform === 'win32' && fs.existsSync(path.join(root, 'electron/windows-widget-layer.mjs'))) {
-      assert.equal(widget.lowered, true);
-      assert.equal(widget.focusable, false);
-    }
-    assert.deepEqual(layers, ['top', 'bottom']);
-    assert.equal(await api.getWidgetLayer(), 'bottom');
-    const recover = trayMenu.find(item => item.label === '将浮窗置顶').click;
-    if (process.platform === 'darwin') {
-      const windowMenu = applicationMenu.find(item => item.label === '窗口').submenu;
-      assert.equal(windowMenu.find(item => item.label === '将浮窗置顶').click, recover);
-    }
-    await widgetApi.hideWidget();
-    await recover();
-    assert.equal(widget.isVisible(), true);
-    assert.equal(await widgetApi.getWidgetLayer(), 'top');
-    assert.deepEqual(widget.nativeLayerArgs, [true, 'floating']);
-    if (widget.lowered) {
-      assert.equal(widget.focusable, true);
-      assert.equal(widget.skipTaskbar, true);
-    }
-    assert.deepEqual(layers, ['top', 'bottom', 'top']);
-    stopListening();
-    await widgetApi.setWidgetLayer('bottom');
-    assert.deepEqual(layers, ['top', 'bottom', 'top']);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'desktop.json'), 'utf8')).widgetLayer, 'bottom');
-    pass('legacy settings default to top; guarded layer changes and menu recovery stay synchronized');
-  }
-  assert.equal((await widgetApi.getState()).settings.dailySalary, 680);
-  let received = null;
-  const unsubscribe = widgetApi.onStateChanged(value => {
-    received = value;
-  });
-  await api.setState({ ...state, privacy: true });
-  assert.equal(received?.privacy, true);
-  unsubscribe();
-  await widgetApi.restoreMain();
-  assert.equal(windows[0].isMinimized(), false);
-  assert.equal(windows[1].isVisible(), false);
-  pass('packaged widget bridge can read state, receive actual main broadcasts and request restoration');
 
   app.quit();
   app.removeAllListeners();
@@ -472,7 +501,11 @@ try {
   await Promise.resolve();
   const reloaded = await windows[0].bridge.getState();
   assert.equal(reloaded.privacy, true);
-  assert.equal(reloaded.settings.dailySalary, 680);
+  assert.equal(reloaded.settings.monthlySalary, 680);
+  assert.equal(reloaded.settings.currency, 'HKD');
+  assert.equal(reloaded.settings.region, 'CN');
+  assert.equal(reloaded.settings.paydayMode, 'fixed-day');
+  assert.equal(reloaded.settings.payday, 10);
   assert.equal(reloaded.settings.endTime, '18:00');
   if (hasLayerControls) {
     assert.equal(await windows[0].bridge.getWidgetLayer(), 'bottom');

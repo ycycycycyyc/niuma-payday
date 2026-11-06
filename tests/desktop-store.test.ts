@@ -3,14 +3,15 @@ import { test, type TestContext } from 'node:test';
 import { DEFAULT_STATE, readState, writeState } from '../src/lib/store.ts';
 import { describeDesktopError, isDesktopHost } from '../src/lib/desktop-error.ts';
 
-const requested = () => ({ ...structuredClone(DEFAULT_STATE), configured: true, settings: { ...structuredClone(DEFAULT_STATE.settings), dailySalary: 680 } });
+const requested = () => ({ ...structuredClone(DEFAULT_STATE), configured: true, settings: { ...structuredClone(DEFAULT_STATE.settings), monthlySalary: 16_800, currency: 'HKD' as const, region: 'CN' as const } });
 
-function host(t: TestContext, bridge: unknown, agent = 'Electron/45.2.3') {
+function host(t: TestContext, bridge: unknown, agent = 'Electron/45.2.3', initial: Record<string, string> = {}) {
   const browserWrites: string[] = [];
   const browserReads: string[] = [];
+  const stored = new Map(Object.entries(initial));
   const storage = {
-    setItem(key: string) { browserWrites.push(key); },
-    getItem(key: string) { browserReads.push(key); return null; },
+    setItem(key: string, value: string) { browserWrites.push(key); stored.set(key, value); },
+    getItem(key: string) { browserReads.push(key); return stored.get(key) ?? null; },
   };
   for (const [key, value] of Object.entries({ window: { niuma: bridge, navigator: { userAgent: agent } }, localStorage: storage })) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, key);
@@ -42,7 +43,8 @@ test('an empty, legacy, or mismatched desktop receipt cannot be reported as a co
   const state = requested();
   let next: unknown;
   const browser = host(t, storageBridge(async () => next));
-  for (const reply of [undefined, null, { version: 1 }, DEFAULT_STATE, { ...state, settings: { ...state.settings, dailySalary: 1 } },
+  for (const reply of [undefined, null, { version: 1 }, { ...state, version: 2 }, DEFAULT_STATE, { ...state, settings: { ...state.settings, monthlySalary: 1 } },
+    { ...state, settings: { ...state.settings, paydayMode: 'fixed-day' } },
     { ...state, settings: { ...state.settings, dayOverrides: { '2026-11-07': 'work' } } }, { ...state, privacy: true }]) {
     next = reply;
     await assert.rejects(writeState(state), /NIUMA_WRITE_UNCONFIRMED/);
@@ -57,7 +59,9 @@ test('a valid acknowledged write uses the main-process calendar even if it chang
   host(t, storageBridge(async () => ({ ...state, calendar })));
   const result = await writeState(state);
   assert.equal(result.configured, true);
-  assert.equal(result.settings.dailySalary, 680);
+  assert.equal(result.settings.monthlySalary, 16_800);
+  assert.equal(result.settings.currency, 'HKD');
+  assert.equal(result.settings.region, 'CN');
   assert.deepEqual(result.calendar, calendar);
 });
 
@@ -66,7 +70,35 @@ test('a genuine web preview can still save locally without Electron', async t =>
   assert.equal(isDesktopHost(), false);
   const state = requested();
   assert.deepEqual(await writeState(state), state);
-  assert.deepEqual(browser.browserWrites, ['niuma.payday.v2']);
+  assert.deepEqual(browser.browserWrites, ['niuma.payday.v3']);
+});
+
+test('web legacy reads preserve HKD plus mainland preferences and save a separate v3 profile', async t => {
+  const legacy = { version: 2, configured: true, privacy: true, goal: { name: '电影', amount: 100 },
+    settings: { dailySalary: 680, currency: 'HKD', region: 'CN', payday: 15, startTime: '10:00', endTime: '19:00' } };
+  const browser = host(t, undefined, 'Mozilla/5.0 Chrome/145.0.0.0 Safari/537.36',
+    { 'niuma.payday.v2': JSON.stringify(legacy) });
+  const state = await readState();
+  assert.deepEqual(browser.browserReads, ['niuma.payday.v3', 'niuma.payday.v2']);
+  assert.equal(state.configured, false);
+  assert.equal(state.settings.monthlySalary, 0);
+  assert.equal(state.settings.currency, 'HKD');
+  assert.equal(state.settings.region, 'CN');
+  assert.equal(state.settings.paydayMode, 'fixed-day');
+  assert.equal(state.settings.payday, 15);
+  assert.deepEqual(state.goal, legacy.goal);
+  await writeState(state);
+  assert.deepEqual(await readState(), state);
+  assert.deepEqual(browser.browserWrites, ['niuma.payday.v3']);
+});
+
+test('an unconfigured migration can be acknowledged without activating a zero monthly rate', async t => {
+  const state = { ...requested(), configured: false,
+    settings: { ...requested().settings, monthlySalary: 0, paydayMode: 'fixed-day' as const, payday: 10 } };
+  host(t, storageBridge(async value => JSON.parse(JSON.stringify(value))));
+  assert.deepEqual(await writeState(state), state);
+  const configured = { ...state, configured: true };
+  await assert.rejects(writeState(configured), /NIUMA_WRITE_UNCONFIRMED/);
 });
 
 test('desktop diagnostics cover missing bridges, authorization, space, locked files and uncertain writes', () => {

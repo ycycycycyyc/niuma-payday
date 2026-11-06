@@ -57,6 +57,7 @@ function App() {
   const [maximized, setMaximized] = useState(false);
   const [widgetPosition, setWidgetPosition] = useState({ x: 24, y: 24 });
   const [calendarBusy, setCalendarBusy] = useState(false);
+  const calendarJobs = useRef(new Set<string>());
   const [dayBusy, setDayBusy] = useState(false);
   const drag = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
   const demo = !state.configured;
@@ -67,8 +68,8 @@ function App() {
   const todayKey = dateKey(realNow);
   const todaySchedule = classifyDay(realNow, settings, state.calendar);
   const cachedYear = state.calendar[`${settings.region}-${realNow.getFullYear()}`];
-  const calendarHint = demo ? '只需设置日薪和上下班时间，工作日自动开启。'
-    : !cachedYear && !calendarBusy ? '尚无当年日历，暂按周一至周五运行。' : '';
+  const calendarHint = demo ? state.settings.monthlySalary === 0 ? '已保留原有偏好，请补填月薪后开始计薪。' : '只需设置月薪和上下班时间，工作日自动开启。'
+    : !calendarBusy ? salary.calendarNotice ?? '' : '';
   const symbol = currencySymbol(settings.currency);
   const isWidget = window.location.hash === '#/widget';
   const amountText = (value: number, digits = 2) => state.privacy ? '••••' : `${symbol}${money(value, digits)}`;
@@ -83,7 +84,7 @@ function App() {
   useEffect(() => { if (!notice) return; const id = setTimeout(() => setNotice(null), notice.error ? 9000 : 4200); return () => clearTimeout(id); }, [notice]);
   useEffect(() => { document.body.classList.toggle('widget-body', isWidget); return () => document.body.classList.remove('widget-body'); }, [isWidget]);
   const save = async (next: AppState) => { const saved = await writeState(next); setState(saved); return saved; };
-  const saveSettings = async (next: SalarySettings) => { await save({ ...state, settings: next, configured: true }); setSettingsOpen(false); setBreakStart(null); setCompletedBreaks(0); setToast('日薪已保存。工作日自动计薪，周末和假日安心休息。'); };
+  const saveSettings = async (next: SalarySettings) => { await save({ ...state, settings: next, configured: true }); setSettingsOpen(false); setBreakStart(null); setCompletedBreaks(0); setToast('月薪已保存，按当月工作日自动分摊。周末含调休补班默认休息。'); };
   const action = async (fn: () => Promise<void>, operation = 'window') => {
     try { await fn(); } catch (error) { showError(error, operation); }
   };
@@ -102,23 +103,28 @@ function App() {
   };
   const restAmount = breakStart === null ? 0 : earningsBetween(settings, new Date(breakStart), now, demo ? {} : state.calendar);
   const refreshCalendar = async (manual = false) => {
-    if (calendarBusy) return;
+    const region = settings.region;
+    if (calendarJobs.current.has(region)) return;
+    calendarJobs.current.add(region);
     setCalendarBusy(true);
     try {
       if (window.niuma) {
         const result = await window.niuma.refreshCalendar();
-        setState(previous => ({ ...previous, calendar: result.calendar }));
+        setState(previous => ({ ...previous, calendar: { ...previous.calendar, ...result.calendar } }));
         if (manual) setNotice({ text: result.message, error: result.status === 'unavailable' });
       } else {
-        const calendar = await fetchCalendarYear(settings.region, new Date().getFullYear());
+        const year = new Date().getFullYear();
+        const results = await Promise.allSettled([year, year + 1].map(value => fetchCalendarYear(region, value, undefined, state.calendar[`${region}-${value}`])));
+        const updates = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+        if (!updates.length) throw new Error('日历更新暂不可用');
         const latest = await readState();
-        await save({ ...latest, calendar: { ...latest.calendar, [`${calendar.region}-${calendar.year}`]: calendar } });
-        if (manual) setToast('日历已更新。');
+        await save({ ...latest, calendar: { ...latest.calendar, ...Object.fromEntries(updates.map(calendar => [`${calendar.region}-${calendar.year}`, calendar])) } });
+        if (manual) setNotice({ text: results[0].status === 'fulfilled' ? '日历已更新。' : '当年日历更新失败，已有有效缓存继续保留。', error: results[0].status === 'rejected' });
       }
     } catch {
       if (manual) setNotice({ text: cachedYear ? '更新失败，继续使用已保存的日历。' : '暂时无法获取日历，可手动切换今天上班或休息。', error: true });
     }
-    finally { setCalendarBusy(false); }
+    finally { calendarJobs.current.delete(region); setCalendarBusy(calendarJobs.current.size > 0); }
   };
   useEffect(() => {
     if (!loaded || demo || isWidget) return;
@@ -200,7 +206,7 @@ function App() {
         {page === 'dashboard' && <>
           <section className="calendar-banner" aria-label="今天的工作安排">
             <div className="calendar-status"><span className={`status-dot ${todaySchedule.working ? '' : 'resting'}`} /><div><strong>{demo ? '开始记录我的工资' : `${todaySchedule.reason} · ${settings.startTime}—${settings.endTime}`}</strong>{calendarHint && <p>{calendarHint}</p>}</div></div>
-            <div className="day-actions">{demo ? <button className="button primary" onClick={() => setSettingsOpen(true)}>设置我的日薪<ArrowUpRight size={16} /></button> : <>
+            <div className="day-actions">{demo ? <button className="button primary" onClick={() => setSettingsOpen(true)}>设置我的月薪<ArrowUpRight size={16} /></button> : <>
               <button className="button secondary" disabled={dayBusy} onClick={() => void overrideToday(todaySchedule.working ? 'rest' : 'work')}>{todaySchedule.working ? '今天休息' : '今天上班'}</button>
               {settings.dayOverrides[todayKey] && <button className="text-button" disabled={dayBusy} onClick={() => void overrideToday('auto')}>恢复日历</button>}
               <button className="text-button" disabled={calendarBusy} onClick={() => void refreshCalendar(true)}>{calendarBusy ? '更新中…' : '更新日历'}</button>
@@ -217,7 +223,7 @@ function App() {
                 <div className="progress-track"><i style={{ width: `${salary.progress * 100}%` }} /><span className="progress-tip" style={{ left: `${Math.min(97, Math.max(3, salary.progress * 100))}%` }}>✦</span></div>
                 <div className="track-caption">{settings.lunchEnabled ? '已扣除午休' : '全时段计薪'}</div>
               </div>
-              <div className="hero-footer"><span><Wallet size={14} />{demo ? '演示日薪' : '日薪'} {amountText(settings.dailySalary)}</span><button onClick={() => void action(openWidget, 'widget')}><Monitor size={15} />开启悬浮窗<ArrowUpRight size={15} /></button></div>
+              <div className="hero-footer"><span><Wallet size={14} />{demo ? '演示月薪' : '月薪'} {amountText(settings.monthlySalary)}</span><button onClick={() => void action(openWidget, 'widget')}><Monitor size={15} />开启悬浮窗<ArrowUpRight size={15} /></button></div>
             </section>
 
             <section className="mood-card"><div className="card-top"><span className="section-label">我的打工搭子</span><Flower2 size={16} aria-hidden="true" /></div><div className="mascot-scene"><span className="buddy-label"><span />{salary.status === 'after' || salary.status === 'off' ? '下班万岁' : '今日份元气已到账'}</span><Mascot /><span className="scene-spark spark-one">✧</span><span className="scene-spark spark-two">✳</span></div><div className="buddy-copy"><h2>{quotes[quote][0]}</h2><p>{quotes[quote][1]}</p></div><button className="encourage-button" onClick={() => setQuote(v => (v + 1) % quotes.length)}><Heart size={15} />再来一点鼓励<ArrowUpRight size={15} /></button></section>
@@ -226,7 +232,7 @@ function App() {
           <div className="stats-row">
             <section className="stat-card"><span className="stat-icon lilac"><Wallet size={19} /></span><div><div className="stat-label">本月已赚</div><strong>{amountText(salary.monthEarned)}</strong></div></section>
             <section className="stat-card"><span className="stat-icon peach"><ArrowDownRight size={21} /></span><div><div className="stat-label">距离下班</div><strong className="countdown">{salary.status === 'off' ? '今日休息' : salary.status === 'after' ? '已下班，去生活' : duration(salary.remainingSeconds)}</strong></div></section>
-            <section className="stat-card"><span className="stat-icon yellow"><Coins size={20} /></span><div><div className="stat-label">下次发薪日</div><strong title={salary.nextPayday.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}>{salary.daysToPayday === 0 ? '就是今天' : <>{salary.daysToPayday}<small> 天后</small></>}</strong></div></section>
+            <section className="stat-card"><span className="stat-icon yellow"><Coins size={20} /></span><div><div className="stat-label">下次发薪日{salary.paydayEstimated && ' · 估算'}</div><strong title={salary.nextPayday?.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}>{salary.daysToPayday === null ? '暂无法确定' : salary.daysToPayday === 0 ? '就是今天' : <>{salary.daysToPayday}<small> 天后</small></>}</strong></div></section>
           </div>
 
           <div className="lower-grid"><section className="week-card"><div className="card-top"><div><h3>本周工资 <small>{settings.currency}</small></h3></div></div><div className="week-chart" role="img" aria-label={`本周每日预估收入：${salary.week.map(day => `${day.label} ${amountText(day.earned)}`).join('，')}`}>
@@ -244,7 +250,7 @@ function App() {
         <footer className="page-footer"><span><Flower2 size={14} />每一秒努力，都值得被看见。</span><span>仅作收入估算 · 工资数据保存在本机</span></footer>
       </main>
     </div>
-    {settingsOpen && <SettingsModal settings={state.settings} onSave={saveSettings} onClose={() => setSettingsOpen(false)} />}
+    {settingsOpen && <SettingsModal settings={state.settings} calendar={state.calendar} onSave={saveSettings} onClose={() => setSettingsOpen(false)} />}
     {goalOpen && <GoalModal goal={state.goal} onSave={async goal => { await save({ ...state, goal }); setGoalOpen(false); setToast('新的小目标，安排好了。'); }} onClose={() => setGoalOpen(false)} />}
     {notice && <div className="toast" role={notice.error ? 'alert' : 'status'}>{notice.error ? <span aria-hidden="true">!</span> : <Check size={17} />}<span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="关闭提示"><X size={14} /></button></div>}
     {browserWidget && <div className="browser-widget-host"

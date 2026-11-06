@@ -13,16 +13,16 @@ const platformProfiles = [
   { name: 'mac-retina', platform: 'Macintosh; Intel Mac OS X 10_15_7', scale: 2 },
 ];
 
-async function openWidget(page: Page, dailySalary = 720, currency = 'CNY') {
+async function openWidget(page: Page, monthlySalary = 15120, currency = 'CNY') {
   const data = {
-    version: 2,
+    version: 3,
     configured: true,
-    settings: { ...DEFAULT_SETTINGS, dailySalary, currency },
+    settings: { ...DEFAULT_SETTINGS, monthlySalary, currency },
     goal: { name: '咖啡', amount: 25 },
     privacy: false,
     calendar: {},
   };
-  await page.addInitScript(value => localStorage.setItem('niuma.payday.v2', JSON.stringify(value)), data);
+  await page.addInitScript(value => localStorage.setItem('niuma.payday.v3', JSON.stringify(value)), data);
   await page.clock.install({ time: new Date('2026-11-06T06:36:00Z') });
   await page.clock.pauseAt(new Date('2026-11-06T06:36:12Z'));
   await page.goto('/#/widget');
@@ -148,7 +148,7 @@ test('maximum supported HKD salary, mascot, countdown and controls stay inside n
   await page.setViewportSize({ width: 320, height: 272 });
   await openWidget(page, 1_000_000_000, 'HKD');
   await expect(page.locator('.live-amount .currency')).toHaveText('HK$');
-  await expect(page.locator('.amount-integer')).toHaveText(/\d{3},\d{3},\d{3}/);
+  await expect(page.locator('.amount-integer')).toHaveText(/\d{2},\d{3},\d{3}/);
   for (const width of [320, 376]) {
     await page.setViewportSize({ width, height: 272 });
     const metrics = await widgetMetrics(page);
@@ -343,20 +343,20 @@ test('standalone HTML runs from file offline, changes wallpaper, ticks and reope
   const salaryCard = main.locator('.earnings-card');
   await expect(salaryCard).toBeVisible();
   expect(await paintSample(salaryCard, .58, .44)).toEqual([253, 237, 244]);
-  await main.getByRole('button', { name: '设置我的日薪', exact: true }).click();
+  await main.getByRole('button', { name: '设置我的月薪', exact: true }).click();
   const settings = main.getByRole('dialog');
-  const dailySalary = settings.getByLabel('日薪', { exact: true });
+  const monthlySalary = settings.getByLabel('月薪', { exact: true });
   const startTime = settings.getByLabel('上班时间', { exact: true });
   const endTime = settings.getByLabel('下班时间', { exact: true });
-  // The test clock is Friday afternoon. This completed custom shift earns the whole day rate.
-  await dailySalary.fill('399');
+  // The test clock is Friday afternoon. The monthly amount is divided across 21 workdays; this shift earns 399.
+  await monthlySalary.fill('8379');
   await startTime.fill('06:11');
   await endTime.fill('07:22');
   await settings.getByRole('button', { name: '保存并开始计薪' }).click();
   await expect(settings).toHaveCount(0);
   await expect(salaryCard.locator('.amount-integer')).toHaveText('399');
   await main.getByRole('button', { name: '工资与偏好设置' }).click();
-  await expect(dailySalary).toHaveValue('399');
+  await expect(monthlySalary).toHaveValue('8379');
   await expect(startTime).toHaveValue('06:11');
   await expect(endTime).toHaveValue('07:22');
   await settings.getByRole('button', { name: '先不改了' }).click();

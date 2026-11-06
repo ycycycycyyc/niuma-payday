@@ -22,11 +22,28 @@ const validRegionYear = (region, year) => ['CN', 'HK'].includes(region) && Numbe
 const names = (value, year) => record(value) && Object.entries(value).every(([date, name]) =>
   isValidDateKey(date) && Number(date.slice(0, 4)) === year && typeof name === 'string' && name.trim().length > 0 && name.length <= 200);
 
+function mainlandRecords(data, year) {
+  if (!record(data) || data.year !== year || !Array.isArray(data.days) || data.days.length === 0) {
+    throw new Error(`${year} 年中国大陆假日日历尚未提供`);
+  }
+  const dates = new Set();
+  for (const item of data.days) {
+    if (!record(item) || !isValidDateKey(item.date)
+      || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 200 || typeof item.isOffDay !== 'boolean') {
+      throw new Error('中国大陆日历数据格式不完整');
+    }
+    if (dates.has(item.date)) throw new Error('日历包含重复日期');
+    dates.add(item.date);
+  }
+  return data.days;
+}
+
 export function isValidCalendarYear(value) {
   return record(value) && validRegionYear(value.region, value.year)
     && names(value.holidays, value.year) && Object.keys(value.holidays).length > 0
     && names(value.makeupWorkdays, value.year)
     && Object.keys(value.makeupWorkdays).every(date => !Object.hasOwn(value.holidays, date))
+    && (value.nextYearChecked === undefined || typeof value.nextYearChecked === 'boolean')
     && typeof value.fetchedAt === 'string' && Number.isFinite(Date.parse(value.fetchedAt))
     && typeof value.source === 'string' && value.source.startsWith('https://') && value.source.length < 2048;
 }
@@ -63,17 +80,13 @@ export function parseCalendarYear(region, year, data, fetchedAt = new Date().toI
   const makeupWorkdays = {};
   const source = region === 'CN' ? `${CALENDAR_SOURCES.CN}${year}.json` : CALENDAR_SOURCES.HK;
   if (region === 'CN') {
-    if (!record(data) || data.year !== year || !Array.isArray(data.days) || data.days.length === 0) {
-      throw new Error(`${year} 年中国大陆假日日历尚未提供`);
-    }
-    for (const item of data.days) {
-      if (!record(item) || !isValidDateKey(item.date) || Number(item.date.slice(0, 4)) !== year
-        || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 200 || typeof item.isOffDay !== 'boolean') {
-        throw new Error('中国大陆日历数据格式不完整');
-      }
-      if (Object.hasOwn(holidays, item.date) || Object.hasOwn(makeupWorkdays, item.date)) throw new Error('日历包含重复日期');
+    // A New Year arrangement may also contain dates in the neighboring year.
+    // Validate those records too, then keep this cache entry strictly year-scoped.
+    for (const item of mainlandRecords(data, year)) {
+      if (Number(item.date.slice(0, 4)) !== year) continue;
       (item.isOffDay ? holidays : makeupWorkdays)[item.date] = item.name.trim();
     }
+    if (Object.keys(holidays).length === 0) throw new Error(`${year} 年中国大陆假日日历尚未提供`);
   } else {
     if (!record(data) || !Array.isArray(data.vcalendar) || data.vcalendar.length === 0) throw new Error('香港日历数据格式不完整');
     for (const calendar of data.vcalendar) {
@@ -96,12 +109,43 @@ export function parseCalendarYear(region, year, data, fetchedAt = new Date().toI
 }
 
 /** Fetches public calendar data only. No salary or user setting is sent to the service. */
-export async function fetchCalendarYear(region, year, fetcher = globalThis.fetch) {
+export async function fetchCalendarYear(region, year, fetcher = globalThis.fetch, previous) {
   if (!validRegionYear(region, year)) throw new RangeError('不支持的地区或年份');
   const url = region === 'CN' ? `${CALENDAR_SOURCES.CN}${year}.json` : CALENDAR_SOURCES.HK;
-  const response = await fetcher(url, { signal: AbortSignal.timeout(12_000), headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(response.status === 404 ? `${year} 年假日日历尚未提供` : `假日日历更新失败 (${response.status})`);
-  const text = await response.text();
-  if (text.length > 1_000_000) throw new Error('假日日历数据过大');
-  return parseCalendarYear(region, year, JSON.parse(text.replace(/^\uFEFF/, '')));
+  const download = async (source, sourceYear) => {
+    const response = await fetcher(source, { signal: AbortSignal.timeout(12_000), headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(response.status === 404 ? `${sourceYear} 年假日日历尚未提供` : `假日日历更新失败 (${response.status})`);
+    const text = await response.text();
+    if (text.length > 1_000_000) throw new Error('假日日历数据过大');
+    return JSON.parse(text.replace(/^\uFEFF/, ''));
+  };
+  const primary = download(url, year);
+  // December can be amended by the next year's New Year arrangement. The
+  // supplement is optional until confirmed amendments have been cached, and
+  // partial next-year records must never stand in for a missing primary calendar.
+  const supplement = region === 'CN' && year < 2199
+    ? download(`${CALENDAR_SOURCES.CN}${year + 1}.json`, year + 1).then(data => {
+      parseCalendarYear('CN', year + 1, data);
+      return data.days.filter(item => Number(item.date.slice(0, 4)) === year);
+    }).catch(() => null)
+    : Promise.resolve(null);
+  const [data, extraDays] = await Promise.all([primary, supplement]);
+  const result = parseCalendarYear(region, year, data);
+  if (region === 'CN') {
+    if (extraDays === null && isValidCalendarYear(previous) && previous.region === region
+      && previous.year === year && previous.nextYearChecked === true) {
+      // Returning the primary alone would erase a previously confirmed December
+      // amendment. Reject so the caller retains that entire cache and timestamp.
+      throw new Error('次年补充日历更新失败，继续使用已缓存的节假日日历');
+    }
+    result.nextYearChecked = extraDays !== null;
+  }
+  const amended = { ...result, holidays: { ...result.holidays }, makeupWorkdays: { ...result.makeupWorkdays } };
+  for (const item of extraDays ?? []) {
+    // The newer arrangement wins if the two source files disagree on a date.
+    delete amended.holidays[item.date];
+    delete amended.makeupWorkdays[item.date];
+    (item.isOffDay ? amended.holidays : amended.makeupWorkdays)[item.date] = item.name.trim();
+  }
+  return isValidCalendarYear(amended) ? amended : result;
 }

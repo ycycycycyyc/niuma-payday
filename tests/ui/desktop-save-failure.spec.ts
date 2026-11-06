@@ -20,9 +20,9 @@ test('a failed desktop save explains why, retains the form, and can be retried',
     } });
   });
   await page.goto('/');
-  await page.getByRole('button', { name: '设置我的日薪' }).click();
+  await page.getByRole('button', { name: '设置我的月薪' }).click();
   const dialog = page.getByRole('dialog');
-  const daily = dialog.getByLabel('日薪', { exact: true });
+  const daily = dialog.getByLabel('月薪', { exact: true });
   await daily.fill('680');
   await dialog.getByLabel('上班时间', { exact: true }).fill('08:30');
   await dialog.getByRole('button', { name: '保存并开始计薪' }).click();
@@ -30,9 +30,9 @@ test('a failed desktop save explains why, retains the form, and can be retried',
   await expect(dialog.getByRole('alert')).toContainText('输入已保留');
   await expect(daily).toHaveValue('680');
   await expect(dialog.getByLabel('上班时间', { exact: true })).toHaveValue('08:30');
-  expect(await page.evaluate(() => localStorage.getItem('niuma.payday.v2'))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('niuma.payday.v3'))).toBeNull();
   await dialog.getByRole('button', { name: '保存并开始计薪' }).click();
   await expect(dialog).toHaveCount(0);
-  const saved = await page.evaluate(() => window.niuma!.getState()) as { configured: boolean; settings: { dailySalary: number; startTime: string } };
-  expect(saved).toMatchObject({ configured: true, settings: { dailySalary: 680, startTime: '08:30' } });
+  const saved = await page.evaluate(() => window.niuma!.getState()) as { configured: boolean; settings: { monthlySalary: number; startTime: string } };
+  expect(saved).toMatchObject({ configured: true, settings: { monthlySalary: 680, startTime: '08:30' } });
 });

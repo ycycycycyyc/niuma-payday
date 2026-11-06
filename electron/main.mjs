@@ -10,6 +10,7 @@ import { fullWidgetHeight, petLaneHeight, widgetBoundsInWorkArea } from '../shar
 import { setWindowsWidgetLayer } from './windows-widget-layer.mjs';
 import { DesktopPet } from './desktop-pet.mjs';
 import { normalizePetLaunchPose } from '../shared/desktop-pet-motion.mjs';
+import { migrateLegacyProfile } from '../shared/profile-migration.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const developmentURL = process.env.VITE_DEV_SERVER_URL;
@@ -80,7 +81,7 @@ function writeJSON(filename, value) {
 
 const isRecord = value => value && typeof value === 'object' && !Array.isArray(value);
 function validState(value) {
-  if (!isRecord(value) || value.version !== 2 || typeof value.configured !== 'boolean') return false;
+  if (!isRecord(value) || value.version !== 3 || typeof value.configured !== 'boolean') return false;
   if (value.privacy !== undefined && typeof value.privacy !== 'boolean') return false;
   if (value.goal !== undefined && (!isRecord(value.goal) || typeof value.goal.name !== 'string'
     || !value.goal.name.trim() || value.goal.name.length > 32 || !Number.isFinite(value.goal.amount)
@@ -89,9 +90,11 @@ function validState(value) {
   if (value.settings === undefined) return value.configured === false;
   const settings = value.settings;
   const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
-  if (!isRecord(settings) || !Number.isFinite(settings.dailySalary) || settings.dailySalary <= 0
-    || settings.dailySalary > 1_000_000_000 || !['CNY', 'HKD', 'USD'].includes(settings.currency)
+  if (!isRecord(settings) || !Number.isFinite(settings.monthlySalary) || settings.monthlySalary < 0
+    || (value.configured && settings.monthlySalary === 0)
+    || settings.monthlySalary > 1_000_000_000 || !['CNY', 'HKD', 'USD'].includes(settings.currency)
     || !['CN', 'HK'].includes(settings.region) || typeof settings.autoWidget !== 'boolean'
+    || !['last-workday', 'fixed-day'].includes(settings.paydayMode)
     || typeof settings.lunchEnabled !== 'boolean' || !Number.isInteger(settings.payday)
     || settings.payday < 1 || settings.payday > 31 || !isRecord(settings.dayOverrides)
     || Object.entries(settings.dayOverrides).some(([key, mode]) => !isValidDateKey(key) || !['work', 'rest'].includes(mode))
@@ -469,7 +472,7 @@ async function refreshCalendar(force = false) {
       calendarAttempts.set(`${region}-${value}`, Date.now());
       const data = await fetchCalendarYear(region, value, (url, options = {}) => fetch(url, {
         ...options, signal: AbortSignal.timeout(12_000),
-      }));
+      }), cache[`${region}-${value}`]);
       return { key: `${region}-${value}`, data };
     }));
     if (quitting) return { status: 'cached', message: '应用正在退出', calendar: appState?.calendar ?? {} };
@@ -477,7 +480,7 @@ async function refreshCalendar(force = false) {
     let saved = true;
     if (Object.keys(updates).length && !quitting) {
       // Read latest state after the network await so edits made while fetching survive.
-      const next = { ...(appState ?? { version: 2, configured: false }), calendar: { ...normalizeCalendarCache(appState?.calendar), ...updates } };
+      const next = { ...(appState ?? { version: 3, configured: false }), calendar: { ...normalizeCalendarCache(appState?.calendar), ...updates } };
       try { writeJSON(statePath(), next); appState = next; broadcastState(); }
       catch (error) { saved = false; console.warn('Unable to cache holiday calendar:', error.message); }
     }
@@ -599,7 +602,7 @@ function installIPC() {
   handle('niuma:get-state', () => appState);
   handle('niuma:set-privacy', hidden => {
     if (typeof hidden !== 'boolean') throw new Error('[SETTINGS_INVALID] 金额显隐设置无效。');
-    saveProfile({ version: 2, configured: false, ...appState, privacy: hidden });
+    saveProfile({ version: 3, configured: false, ...appState, privacy: hidden });
     return appState.privacy;
   });
   handle('niuma:get-widget-layer', getWidgetLayer);
@@ -609,7 +612,7 @@ function installIPC() {
     const serialized = JSON.stringify(value);
     if (Buffer.byteLength(serialized, 'utf8') > 1024 * 1024) throw new Error('Settings are too large.');
     const next = JSON.parse(serialized);
-    if (!validState(next)) throw new Error('[SETTINGS_INVALID] 设置无效，请检查日薪、上下班时间和午休安排。');
+    if (!validState(next)) throw new Error('[SETTINGS_INVALID] 设置无效，请检查月薪、发薪日、上下班时间和午休安排。');
     // Calendar data is authoritative in the main process. A stale renderer must not replace it.
     next.calendar = normalizeCalendarCache(appState?.calendar);
     saveProfile(next);
@@ -651,12 +654,12 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     app.setName('牛马鼓励器');
     if (process.platform === 'win32') app.setAppUserModelId('studio.niuma.payday');
-    appState = readJSON(statePath(), null);
+    appState = migrateLegacyProfile(readJSON(statePath(), null));
     if (appState) {
       const calendar = normalizeCalendarCache(appState.calendar);
-      // Old or damaged settings cannot activate the background scheduler before UI migration.
+      // Preserve legacy preferences before validation, without scheduling before monthly confirmation.
       appState = validState(appState) ? { ...appState, calendar }
-        : { version: 2, configured: false, calendar };
+        : { version: 3, configured: false, calendar };
     }
     desktopState = readJSON(desktopPath(), {});
     installIPC();

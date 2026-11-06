@@ -10,8 +10,8 @@ test('first setup, ticking earnings, privacy, goals, and reload persistence', as
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('/');
   await expect(page.getByText('体验模式 · 演示数据')).toBeVisible();
-  await page.getByRole('button', { name: '设置我的日薪' }).click();
-  await page.getByLabel('日薪', { exact: true }).fill('720');
+  await page.getByRole('button', { name: '设置我的月薪' }).click();
+  await page.getByLabel('月薪', { exact: true }).fill('15120');
   await page.getByLabel('上班时间', { exact: true }).fill('09:00');
   await page.getByLabel('下班时间', { exact: true }).fill('18:00');
   await page.getByRole('button', { name: '保存并开始计薪' }).click();
@@ -35,8 +35,8 @@ test('first setup, ticking earnings, privacy, goals, and reload persistence', as
 test('a holiday stays off, manual work overrides it, and restoring the calendar turns it off', async ({ page }) => {
   await page.route('https://raw.githubusercontent.com/**', route => route.fulfill({ json: { year: 2026, days: [{ date: '2026-11-06', name: '测试假日', isOffDay: true }] } }));
   await page.goto('/');
-  await page.getByRole('button', { name: '设置我的日薪' }).click();
-  await page.getByLabel('日薪', { exact: true }).fill('720');
+  await page.getByRole('button', { name: '设置我的月薪' }).click();
+  await page.getByLabel('月薪', { exact: true }).fill('15120');
   await page.getByRole('button', { name: '保存并开始计薪' }).click();
   await expect(page.locator('.calendar-status')).toContainText('测试假日');
   await expect(page.locator('.earnings-card .amount-integer')).toHaveText('0');
@@ -52,10 +52,10 @@ test('narrow screen and invalid settings remain usable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.getByRole('button', { name: '设置我的日薪' }).click();
-  await page.getByLabel('日薪', { exact: true }).fill('-1');
+  await page.getByRole('button', { name: '设置我的月薪' }).click();
+  await page.getByLabel('月薪', { exact: true }).fill('-1');
   await page.getByRole('button', { name: '保存并开始计薪' }).click();
-  await expect(page.getByLabel('日薪', { exact: true })).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByLabel('月薪', { exact: true })).toHaveAttribute('aria-invalid', 'true');
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.getByRole('button', { name: '关闭设置' }).click();
   await page.getByRole('button', { name: '开启悬浮窗' }).click();

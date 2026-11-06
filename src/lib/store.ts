@@ -2,12 +2,13 @@ import { DEFAULT_SETTINGS, validateSettings, type SalarySettings } from './salar
 import { normalizeCalendarCache, type CalendarCache } from '../../shared/calendar.mjs';
 import { isDesktopHost } from './desktop-error';
 import type { PetLaunchPose } from './pet-motion';
+import { migrateLegacyProfile } from '../../shared/profile-migration.mjs';
 
-export type AppState = { version: 2; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache };
+export type AppState = { version: 3; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache };
 export type WidgetLayer = 'top' | 'bottom';
 export type DesktopPetState = { phase: 'docked' | 'chasing' | 'returning'; dockX?: number; facing?: 1 | -1 };
-export const DEFAULT_STATE: AppState = { version: 2, configured: false, settings: DEFAULT_SETTINGS, goal: { name: '今天的咖啡自由', amount: 25 }, privacy: false, calendar: {} };
-const KEY = 'niuma.payday.v2';
+export const DEFAULT_STATE: AppState = { version: 3, configured: false, settings: DEFAULT_SETTINGS, goal: { name: '今天的咖啡自由', amount: 25 }, privacy: false, calendar: {} };
+const KEY = 'niuma.payday.v3';
 
 declare global {
   interface Window {
@@ -37,21 +38,28 @@ declare global {
 }
 
 export function normalizeState(value: unknown): AppState {
-  if (!value || typeof value !== 'object') return structuredClone(DEFAULT_STATE);
-  const input = value as Partial<AppState>;
-  // A monthly amount cannot be interpreted as a daily amount. Ask for the new rate once.
-  const isDaily = input.version === 2 && input.settings && Number.isFinite(input.settings.dailySalary);
-  const settings = isDaily ? { ...DEFAULT_SETTINGS, ...input.settings } : { ...DEFAULT_SETTINGS };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return structuredClone(DEFAULT_STATE);
+  const input = migrateLegacyProfile(value) as Partial<AppState>;
+  // A missing monthly rate must not silently activate the demo's default salary.
+  const isMonthly = input.version === 3 && input.settings && Number.isFinite(input.settings.monthlySalary);
+  const settings = isMonthly ? { ...structuredClone(DEFAULT_SETTINGS), ...input.settings } : structuredClone(DEFAULT_SETTINGS);
   let valid = false;
-  try { valid = Object.keys(validateSettings(settings)).length === 0; } catch { /* Restore damaged state safely. */ }
+  try { valid = validStoredSettings(settings, input.configured === true); } catch { /* Restore damaged state safely. */ }
   return {
-    version: 2, configured: Boolean(isDaily && input.configured === true && valid),
-    settings: valid ? settings : { ...DEFAULT_SETTINGS },
+    version: 3, configured: Boolean(isMonthly && input.configured === true && valid),
+    settings: valid ? settings : structuredClone(DEFAULT_SETTINGS),
     goal: input.goal && typeof input.goal.name === 'string' && input.goal.name.trim() && Number.isFinite(input.goal.amount) && input.goal.amount > 0 && input.goal.amount <= 100_000_000
       ? { name: input.goal.name.trim().slice(0, 32), amount: input.goal.amount } : { ...DEFAULT_STATE.goal },
     privacy: input.privacy === true,
     calendar: normalizeCalendarCache(input.calendar),
   };
+}
+
+function validStoredSettings(settings: SalarySettings, configured: boolean): boolean {
+  // Zero denotes a migrated daily profile awaiting a monthly salary, never an active rate.
+  const checked = !configured && settings.monthlySalary === 0
+    ? { ...settings, monthlySalary: DEFAULT_SETTINGS.monthlySalary } : settings;
+  return Object.keys(validateSettings(checked)).length === 0;
 }
 
 function desktopStore() {
@@ -67,9 +75,9 @@ function confirmSave(value: unknown, expected: AppState): AppState {
   if (!value || typeof value !== 'object') throw new Error('NIUMA_WRITE_UNCONFIRMED');
   const actual = value as Partial<AppState>;
   const settings = actual.settings;
-  if (actual.version !== 2 || actual.configured !== expected.configured || actual.privacy !== expected.privacy
+  if (actual.version !== 3 || actual.configured !== expected.configured || actual.privacy !== expected.privacy
     || !actual.goal || actual.goal.name !== expected.goal.name || actual.goal.amount !== expected.goal.amount
-    || !settings || Object.keys(validateSettings(settings)).length) throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    || !settings || !validStoredSettings(settings, actual.configured === true)) throw new Error('NIUMA_WRITE_UNCONFIRMED');
   for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof SalarySettings)[]) {
     if (key === 'dayOverrides') {
       const entries = Object.entries(expected.settings.dayOverrides);
@@ -86,7 +94,7 @@ export async function readState() {
     if (value === undefined) throw new Error('NIUMA_READ_UNCONFIRMED');
     return normalizeState(value); // null is a genuine first run with no profile yet.
   }
-  const text = localStorage.getItem(KEY) ?? localStorage.getItem('niuma.payday.v1');
+  const text = localStorage.getItem(KEY) ?? localStorage.getItem('niuma.payday.v2') ?? localStorage.getItem('niuma.payday.v1');
   if (!text) return structuredClone(DEFAULT_STATE);
   try { return normalizeState(JSON.parse(text)); } catch { return structuredClone(DEFAULT_STATE); }
 }

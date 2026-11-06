@@ -19,7 +19,7 @@
 .settings-field > input, .settings-field > select { width: 100%; min-width: 0; height: 44px; padding: 0 13px; border: 1px solid #d8bdce; border-radius: 9px; background: var(--surface); color: var(--settings-ink); font: inherit; font-size: 14px; font-variant-numeric: tabular-nums; }
 .settings-field > input:focus, .settings-field > select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .settings-field [aria-invalid="true"] { border-color: #a43e5d; }
-.settings-field > input[type="number"]#settings-dailySalary { font-size: 20px; font-weight: 600; }
+.settings-field > input[type="number"]#settings-monthlySalary { font-size: 20px; font-weight: 600; }
 .settings-hint { margin: 0; color: var(--settings-muted); font-size: 11px; line-height: 1.6; }
 .settings-shift-hint { margin-top: 8px; }
 .settings-payday { margin-top: 16px; }
