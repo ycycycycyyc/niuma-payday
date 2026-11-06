@@ -27,7 +27,7 @@ body.widget-body { min-width: 0; overflow: hidden; }
 .browser-widget-host:active { cursor: grabbing; }
 
 .widget {
-  --glass-pink: var(--dialogue-pink, #fdedf4);
+  --glass-pink: color-mix(in srgb, var(--dialogue-pink, #fdedf4) 80%, #e9a9c9);
   --glass-ink: #422635;
   --glass-secondary: #663d54;
   --glass-muted: #634253;
@@ -51,11 +51,11 @@ body.widget-body { min-width: 0; overflow: hidden; }
   border: 1px solid color-mix(in srgb, var(--glass-pink) 65%, transparent);
   border-radius: 26px;
   color: var(--glass-ink);
-  /* Keep the center transmissive. Blush reflections gather at the curved perimeter. */
-  background-color: color-mix(in srgb, var(--glass-pink) 13%, transparent);
+  /* A fuller blush tint softens the backdrop while preserving the curved glass refraction. */
+  background-color: color-mix(in srgb, var(--glass-pink) 36%, transparent);
   background-image:
-    radial-gradient(ellipse at 97% 0%, rgb(255 174 212 / 24%), transparent 32%),
-    radial-gradient(ellipse at 0% 103%, rgb(242 156 200 / 22%), transparent 37%);
+    radial-gradient(ellipse at 97% 0%, rgb(255 174 212 / 30%), transparent 32%),
+    radial-gradient(ellipse at 0% 103%, rgb(242 156 200 / 28%), transparent 37%);
   box-shadow: var(--glass-edge-shadow);
   -webkit-backdrop-filter: blur(.6px) saturate(1.06);
   backdrop-filter: blur(.6px) saturate(1.06);

@@ -170,7 +170,7 @@ test('maximum supported HKD salary, mascot, countdown and controls stay inside n
   await page.screenshot({ path: path.join(output, 'narrow-hkd.png'), omitBackground: true });
 });
 
-test('dashboard and floating glass paint the shared dialogue pink and keep salary and controls legible', async ({ page }) => {
+test('dashboard and floating glass paint coordinated pinks and keep salary and controls legible', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const hero = page.locator('.earnings-card');
@@ -196,19 +196,20 @@ test('dashboard and floating glass paint the shared dialogue pink and keep salar
   const onWhite = await paintSample(card, .60, .44);
   await paintBackdrop(page, 'black');
   const onBlack = await paintSample(card, .60, .44);
-  // Verify the actual composite. The centre remains transparent so its visible colour changes with the wallpaper.
+  // The fuller blush softens the wallpaper while still transmitting most of its texture.
+  const blush = [249, 223, 235];
   for (let channel = 0; channel < sample.length; channel++) {
     const transmission = (onWhite[channel] - onBlack[channel]) / 255;
-    expect(transmission).toBeGreaterThan(.7);
-    expect(transmission).toBeLessThan(.95);
-    expect(Math.abs(onBlack[channel] - sample[channel] * (1 - transmission))).toBeLessThanOrEqual(1.5);
+    expect(transmission).toBeGreaterThan(.55);
+    expect(transmission).toBeLessThan(.7);
+    expect(Math.abs(onBlack[channel] - blush[channel] * (1 - transmission))).toBeLessThanOrEqual(1.5);
   }
 
   // A token change must repaint both surfaces. This catches copies of the same hard-coded hex.
   await page.evaluate(() => document.documentElement.style.setProperty('--dialogue-pink', '#0080ff'));
   expect(await paintSample(hero, .58, .44)).toEqual([0, 128, 255]);
   const blueGlass = await paintSample(card, .60, .44);
-  expect(blueGlass[0]).toBeLessThanOrEqual(2);
+  expect(blueGlass[0]).toBeLessThanOrEqual(20);
   expect(blueGlass[1]).toBeGreaterThan(10);
   expect(blueGlass[2]).toBeGreaterThan(blueGlass[1] + 8);
   fs.mkdirSync(output, { recursive: true });
@@ -248,10 +249,12 @@ test('the transparent center passes the wallpaper; the rounded rim deflects actu
   fs.writeFileSync(path.join(output, 'lens-zero.png'), flat);
   fs.writeFileSync(path.join(output, 'optics.json'), JSON.stringify({ previousGain, gain, opacity, edge }, null, 2));
 
-  // Black→white wallpaper must materially change the empty central area.
-  expect(gain).toBeGreaterThan(.7);
-  expect(opacity.centerAlpha).toBeLessThan(70);
-  if (previousGain !== null) expect(gain - previousGain).toBeGreaterThan(.25);
+  // Retain a translucent centre, with more pink coverage than the earlier clear glass.
+  expect(gain).toBeGreaterThan(.55);
+  expect(gain).toBeLessThan(.7);
+  expect(opacity.centerAlpha).toBeGreaterThan(80);
+  expect(opacity.centerAlpha).toBeLessThan(110);
+  if (previousGain !== null) expect(gain).toBeGreaterThan(previousGain);
   const deflected = edge.filter(p => Math.abs(p.shift) >= 3 && p.confidence > .85 && p.confidence - p.zeroScore > .1);
   const left = deflected.filter(p => p.x < 20);
   const right = deflected.filter(p => p.x > 350);
