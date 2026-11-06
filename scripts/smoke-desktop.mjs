@@ -92,6 +92,17 @@ try {
   assert.equal(card.y, widgetLayout.laneHeight);
   assert.equal(card.width, widgetLayout.width);
   assert.equal(card.height, widgetLayout.cardHeight);
+  if (process.platform === 'darwin') {
+    const nativeState = await desktop.evaluate(({ app, BrowserWindow }) => {
+      const panel = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().endsWith('#/widget'));
+      return {
+        allSpaces: panel.isVisibleOnAllWorkspaces(), focusable: panel.isFocusable(),
+        fullscreenable: panel.isFullScreenable(), dockVisible: app.dock.isVisible(),
+      };
+    });
+    assert.deepEqual(nativeState, { allSpaces: true, focusable: true, fullscreenable: false, dockVisible: true });
+    record('macOS floating panel joins all Spaces, accepts focus and keeps the application in the Dock');
+  }
   await widget.screenshot({ path: path.join(artifacts, 'native-widget.png'), fullPage: false });
   record(`manual floating widget is visible, always on top, with a ${widgetLayout.laneHeight} px pet lane and ${card.width}×${card.height} card; main minimized`);
 
@@ -146,7 +157,21 @@ try {
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(true);
   await widget.getByRole('button', { name: '隐藏浮窗', exact: true }).click();
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
-  await main.evaluate(() => window.niuma.restoreMain());
+  if (process.platform === 'darwin') {
+    const invoked = await desktop.evaluate(({ Menu }) => {
+      const windowMenu = Menu.getApplicationMenu()?.items.find(item => item.label === '窗口');
+      const restore = windowMenu?.submenu.items.find(item => item.label === '返回主窗口');
+      if (!restore?.enabled || !restore.visible) return false;
+      restore.click();
+      return true;
+    });
+    assert.equal(invoked, true);
+    await expect.poll(async () => (await windows()).find(win => !win.url.endsWith('#/widget'))?.minimized).toBe(false);
+    assert.equal(await desktop.evaluate(({ app }) => app.dock.isVisible()), true);
+    record('native macOS Window menu command restores the main window with its Dock icon');
+  } else {
+    await main.evaluate(() => window.niuma.restoreMain());
+  }
   await main.getByRole('button', { name: '收起到托盘', exact: true }).click();
   await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.visible).toBe(false);
   assert.equal(child.exitCode, null);

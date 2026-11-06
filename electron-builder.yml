@@ -39,7 +39,9 @@ mac:
       arch: [x64, arm64]
     - target: zip
       arch: [x64, arm64]
-  identity: null
+  # Local and internal builds use an ad-hoc signature for the application and its helpers.
+  identity: '-'
+  timestamp: none
 dmg:
   title: 牛马鼓励器
   iconSize: 96

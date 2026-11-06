@@ -264,6 +264,8 @@ async function createWidget() {
     useContentSize: true,
     roundedCorners: false,
     ...(process.platform === 'win32' ? { thickFrame: false, backgroundMaterial: 'none' } : {}),
+    // A Cocoa panel joins all Spaces, including full-screen apps, without hiding the app's Dock icon.
+    ...(process.platform === 'darwin' ? { type: 'panel', acceptFirstMouse: true } : {}),
     show: false,
     resizable: false,
     maximizable: false,
@@ -277,9 +279,6 @@ async function createWidget() {
     webPreferences: { ...webPreferences, backgroundThrottling: true },
   });
   widgetWindow.setAlwaysOnTop(true, 'floating');
-  if (process.platform === 'darwin') {
-    widgetWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  }
   widgetWindow.on('move', () => {
     clearTimeout(positionTimer);
     positionTimer = setTimeout(saveWidgetPosition, 300);
@@ -458,8 +457,11 @@ function createTray() {
       { type: 'separator' },
       { label: '退出', click: () => app.quit() },
     ]));
-    tray.on('click', restoreMain);
-    tray.on('double-click', restoreMain);
+    // On macOS a status item emits click before it opens its menu.
+    if (process.platform !== 'darwin') {
+      tray.on('click', restoreMain);
+      tray.on('double-click', restoreMain);
+    }
   } catch (error) {
     tray = undefined;
     console.warn('Tray is not available:', error.message);
