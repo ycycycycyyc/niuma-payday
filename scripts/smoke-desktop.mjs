@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect } from '@playwright/test';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 import { macClick, verifyMacWidget } from './smoke-macos-widget.mjs';
+import { verifyWindowsWidget } from './smoke-windows-widget.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
@@ -20,12 +21,16 @@ let main;
 const failures = [];
 const passed = [];
 const record = name => { passed.push(name); console.log(`PASS ${name}`); };
+const windowsNative = process.platform === 'win32' && process.env.NIUMA_WINDOWS_NATIVE_INPUT === '1';
+const windowsBaseline = process.env.NIUMA_WINDOWS_BASELINE === '1';
+let native;
 const windows = () => desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(window => ({
   id: window.id, url: window.webContents.getURL(), visible: window.isVisible(), minimized: window.isMinimized(),
   alwaysOnTop: window.isAlwaysOnTop(), bounds: window.getBounds(), destroyed: window.isDestroyed(),
 })));
 
-try {
+async function verifyDesktop() {
+  if (windowsBaseline) assert.ok(windowsNative, 'Baseline comparisons require real Windows system input');
   desktop = await electron.launch({
     executablePath,
     args: [...(executablePath ? [] : [root]), `--user-data-dir=${userData}`],
@@ -109,6 +114,9 @@ try {
 
   if (process.platform === 'darwin') {
     await verifyMacWidget(desktop, widget, userData, record);
+  } else if (windowsNative) {
+    native = await verifyWindowsWidget(desktop, widget, userData, record, windowsBaseline);
+    if (windowsBaseline) return;
   } else {
     const dog = widget.getByRole('button', { name: '和狗狗握手', exact: true });
     const dogBox = await dog.boundingBox();
@@ -118,7 +126,7 @@ try {
     record('targeted pointer input in the native widget plays the seated handshake');
   }
 
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' && !windowsNative) {
     const originalCursor = await desktop.evaluateHandle(({ screen }) => screen.getCursorScreenPoint);
     try {
       // Only this isolated Electron process reads a fixture coordinate; the OS pointer never moves.
@@ -149,6 +157,7 @@ try {
   const clickWidgetControl = async name => {
     const button = widget.getByRole('button', { name, exact: true });
     if (process.platform === 'darwin') await macClick(desktop, button);
+    else if (windowsNative) await native.click(button);
     else await button.click();
   };
   await clickWidgetControl('返回主窗口');
@@ -188,6 +197,10 @@ try {
   assert.equal((await main.evaluate(() => window.niuma.getState())).settings.dailySalary, 680);
   record('widget hide works; closing main keeps application running in tray');
   assert.deepEqual(failures, []);
+}
+
+try {
+  await verifyDesktop();
 } catch (error) {
   failures.push(error.stack || error.message || String(error));
   if (main && !main.isClosed()) {
@@ -201,5 +214,8 @@ try {
     await expect.poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 8_000 }).toBe(true);
     record('Electron process closed cleanly');
   }
-  fs.writeFileSync(path.join(artifacts, 'native-smoke-result.json'), JSON.stringify({ status: failures.length ? 'failed' : 'passed', passed, errors: failures, userData }, null, 2));
+  const filename = windowsBaseline ? 'windows-baseline-result.json' : 'native-smoke-result.json';
+  const evidence = { status: failures.length ? 'failed' : windowsBaseline ? 'observed' : 'passed', passed, errors: failures, userData,
+    windowsSystemInput: windowsNative, version: native?.version, baselineObservations: windowsBaseline ? native?.observations : undefined };
+  fs.writeFileSync(path.join(artifacts, filename), JSON.stringify(evidence, null, 2));
 }

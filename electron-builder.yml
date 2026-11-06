@@ -17,6 +17,11 @@ files:
 artifactName: Niuma-${version}-${os}-${arch}.${ext}
 win:
   icon: build/icon.ico
+  extraResources:
+    - from: node_modules/koffi/build/koffi/win32_${arch}/koffi.node
+      to: native/koffi.node
+    - from: node_modules/koffi/LICENSE.txt
+      to: native/Koffi-LICENSE.txt
   target:
     - target: nsis
       arch: [x64, arm64]

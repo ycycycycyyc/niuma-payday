@@ -23,6 +23,8 @@ test('clicking the moving dog plays a seated handshake and returns to walking', 
   const dogBefore = await box(dog);
   // A real pointer click, sampled while the application clock is frozen between frames.
   await page.mouse.click(dogBefore.x + dogBefore.width / 2, dogBefore.y + dogBefore.height / 2);
+  await expect(dog).not.toBeFocused();
+  await expect(dog).toHaveCSS('outline-style', 'none');
   const poses: string[] = [];
   const renderedFrames = new Set<string>();
   for (const ms of [100, 210, 210, 300]) {
@@ -99,6 +101,7 @@ test('reduced motion keeps the dog steady, keyboard handshake works and dragging
   expect(await box(dog)).toEqual(resting);
   await dog.focus();
   await page.keyboard.press('Enter');
+  expect(await dog.evaluate(el => getComputedStyle(el, '::after').height)).toBe('5px');
   await page.clock.runFor(800);
   await expect(dog).toHaveAttribute('data-pose', 'paw');
   expect(await box(dog)).toEqual(resting);

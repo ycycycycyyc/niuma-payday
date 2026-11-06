@@ -7,6 +7,7 @@ import { createWidgetSession, decideWidget, dismissWidget, getActiveShift, markM
 import { createEntryPolicy, isTrustedIpc } from '../shared/ipc-origin.mjs';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 import { fullWidgetHeight, petLaneHeight, widgetBoundsInWorkArea } from '../shared/widget-geometry.mjs';
+import { setWindowsWidgetLayer } from './windows-widget-layer.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const developmentURL = process.env.VITE_DEV_SERVER_URL;
@@ -263,7 +264,9 @@ function getWidgetLayer() {
 }
 
 function applyWidgetLayer(layer) {
-  if (layer === 'top') {
+  if (process.platform === 'win32') {
+    setWindowsWidgetLayer(widgetWindow, layer);
+  } else if (layer === 'top') {
     widgetWindow.setAlwaysOnTop(true, 'floating');
   } else if (process.platform === 'darwin') {
     // On macOS false always resets to level 0. The relative offset needs the true form.
@@ -314,7 +317,12 @@ async function createWidget() {
     icon: appIcon,
     webPreferences: { ...webPreferences, backgroundThrottling: true },
   });
-  applyWidgetLayer(getWidgetLayer());
+  try {
+    applyWidgetLayer(getWidgetLayer());
+  } catch (error) {
+    console.warn('Unable to restore saved widget layer:', error.message);
+    setWidgetLayer('top');
+  }
   widgetWindow.on('move', () => {
     clearTimeout(positionTimer);
     positionTimer = setTimeout(saveWidgetPosition, 300);

@@ -74,7 +74,7 @@ export default function Widget({ state, onRestore, onHide, preview = false }: { 
       setChangingLayer(false);
     }
   }
-  const lowerLabel = desktop?.platform === 'darwin' ? '将浮窗置底' : '取消置顶';
+  const lowerLabel = desktop?.platform === 'darwin' || desktop?.platform === 'win32' ? '将浮窗置底' : '取消置顶';
   const layerLabel = layer === null ? '读取浮窗层级' : layer === 'top' ? lowerLabel : '将浮窗置顶';
   const demo = !state.configured;
   const settings = demo ? DEFAULT_SETTINGS : state.settings;
