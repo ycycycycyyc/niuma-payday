@@ -1,0 +1,31 @@
+.browser-chasing-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  overflow: hidden;
+  isolation: isolate;
+  pointer-events: none;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+.browser-chasing-dog {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 76px;
+  height: 76px;
+  pointer-events: none;
+  will-change: transform;
+}
+.browser-chasing-dog[hidden] { display: none; }
+.browser-chasing-sprite {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: no-repeat 0 center / 400% 100%;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+}
+.browser-chasing-layer .browser-chasing-bone { pointer-events: none; }

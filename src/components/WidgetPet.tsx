@@ -187,6 +187,8 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
         dog.dataset.facing = String(pet.facing);
         sprite.style.transform = `scaleX(${pet.facing})`;
       }
+      dog.dataset.stepPhase = String(pet.stepPhase);
+      dog.dataset.speed = String(pet.speed);
       renderFood();
       const moving = !menuOpen && !quiet.matches && trackLength >= 4 && !(chasing && pet.pose === 'wag');
       syncHitArea(time, !moving, frame);
@@ -268,7 +270,9 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
     }
     measure();
     if (dockX !== undefined) {
-      const x = Math.min(trackLength, Math.max(0, dockX - lane.getBoundingClientRect().left - inset - halfDog));
+      const bounds = lane.getBoundingClientRect();
+      const zoom = bounds.width / lane.clientWidth || 1;
+      const x = Math.min(trackLength, Math.max(0, (dockX - bounds.left) / zoom - inset - halfDog));
       motion.current = createPetMotion(x);
       if (facing) motion.current.facing = facing;
     }

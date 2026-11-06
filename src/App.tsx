@@ -291,7 +291,7 @@ function App() {
       }}
       onLostPointerCapture={() => { drag.current = null; }}>
       <Widget state={state} preview onRestore={() => setBrowserWidget(false)} onHide={() => {
-        setBrowserCompanion(companionOrigin(document.querySelector('.browser-widget-host .widget-dog')));
+        setBrowserCompanion(companionOrigin(document.querySelector<HTMLElement>('.browser-chasing-dog:not([hidden])') ?? document.querySelector('.browser-widget-host .widget-dog')));
         setBrowserWidget(false);
       }} />
     </div>}

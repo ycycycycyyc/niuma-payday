@@ -219,7 +219,7 @@ function Preview() {
       {surface === 'widget' && <div className="preview-frame" ref={frame} style={{ ...widgetLayoutStyle, ...(position && { left: position.x, top: position.y, transform: 'none' }) }}
         onPointerDown={startDrag} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}>
         <Widget state={profile} preview backdrop={<WallpaperLens position={position} />} onRestore={openDashboard} onHide={() => {
-          setPetOrigin(companionOrigin(frame.current?.querySelector('.widget-dog') ?? null, field.current));
+          setPetOrigin(companionOrigin(document.querySelector<HTMLElement>('.browser-chasing-dog:not([hidden])') ?? frame.current?.querySelector('.widget-dog') ?? null, field.current));
           setSurface('companion');
         }} />
       </div>}

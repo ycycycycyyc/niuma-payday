@@ -1,9 +1,27 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function box(locator: Locator) {
   const bounds = await locator.boundingBox();
   if (!bounds) throw new Error('Expected a visible widget element');
   return bounds;
+}
+
+async function moveCard(page: Page, card: Locator, x: number, y: number) {
+  const from = await box(card);
+  await page.mouse.move(from.x + 55, from.y + 24);
+  await page.mouse.down();
+  await page.mouse.move(x + 55, y + 24, { steps: 7 });
+  await page.mouse.up();
+  await page.clock.runFor(32);
+}
+
+async function expectDocked(card: Locator, dog: Locator, roaming: Locator) {
+  await expect(roaming).toBeHidden();
+  await expect(dog).toBeVisible();
+  const [home, bounds] = await Promise.all([box(dog), box(card)]);
+  expect(home.x).toBeGreaterThanOrEqual(bounds.x - 1);
+  expect(home.x + home.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
+  expect(Math.abs(home.y + home.height - bounds.y)).toBeLessThan(8);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -12,6 +30,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '开启悬浮窗', exact: true }).click();
   await expect(page.getByRole('region', { name: '工资悬浮窗' })).toBeVisible();
+  await page.evaluate(async () => { await document.fonts.ready; });
   await page.clock.runFor(64);
 });
 
@@ -52,41 +71,133 @@ test('clicking the moving dog plays a seated handshake and returns to walking', 
   await expect(dog).toHaveAttribute('data-pose', 'walk');
 });
 
-test('the bone follows the pointer, the dog chases along the ledge, and either control puts the bone away', async ({ page }) => {
+test('the browser dog follows the bone in two dimensions outside the card and either control returns it home', async ({ page }) => {
   const card = page.getByRole('region', { name: '工资悬浮窗' });
-  const dog = page.getByRole('button', { name: '和狗狗握手' });
+  const dog = page.locator('.widget-dog');
+  const roaming = page.locator('.browser-chasing-dog');
   const takeBone = card.getByRole('button', { name: '拿起骨头' });
   const putAway = card.getByRole('button', { name: '收起骨头' });
   const marker = page.locator('.pet-held-bone');
+  await moveCard(page, card, 432, 320);
   const bounds = await box(card);
   await takeBone.click();
+  await page.clock.runFor(64);
+  await expect(roaming).toBeVisible();
   await expect(putAway).toHaveAttribute('aria-pressed', 'true');
-  const right = { x: bounds.x + bounds.width - 4, y: bounds.y + 66 };
-  await page.mouse.move(right.x, right.y);
-  await page.clock.runFor(3500);
-  await expect(marker).toBeVisible();
-  const held = await box(marker);
-  expect(Math.abs(held.x + held.width / 2 - right.x)).toBeLessThan(40);
-  expect(Math.abs(held.y + held.height / 2 - right.y)).toBeLessThan(40);
-  const rightDog = await box(dog);
-  expect(rightDog.x + rightDog.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
-  expect(Math.abs(rightDog.y + rightDog.height - bounds.y)).toBeLessThan(6);
-  await expect(dog).toHaveAttribute('data-facing', '1');
-  await expect(dog).toHaveAttribute('data-pose', 'wag');
-  await page.mouse.move(bounds.x - 64, bounds.y + 45);
-  await page.clock.runFor(3500);
-  const leftDog = await box(dog);
-  expect(leftDog.x).toBeGreaterThanOrEqual(bounds.x - 1);
-  expect(rightDog.x - leftDog.x).toBeGreaterThan(bounds.width / 2);
-  await expect(dog).toHaveAttribute('data-facing', '-1');
+  await expect(dog).toBeHidden();
+  await expect(roaming).toHaveAttribute('role', 'img');
+  await expect(roaming).toHaveAttribute('aria-label', '追骨头的狗狗');
+  expect(await roaming.evaluate(element => element.closest('.widget-shell'))).toBeNull();
+  for (const point of [
+    { side: 'left', x: bounds.x - 180, y: bounds.y + 60 },
+    { side: 'right', x: bounds.x + bounds.width + 180, y: bounds.y + 60 },
+    { side: 'above', x: bounds.x + bounds.width / 2, y: bounds.y - 180 },
+    { side: 'below', x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height + 180 },
+    { side: 'corner', x: 0, y: 0 },
+    { side: 'corner', x: 1239, y: 839 },
+  ]) {
+    await page.mouse.move(point.x, point.y);
+    await page.clock.runFor(4000);
+    await expect(roaming).toBeVisible();
+    const chased = await box(roaming);
+    expect(chased.x).toBeGreaterThanOrEqual(-1);
+    expect(chased.y).toBeGreaterThanOrEqual(-1);
+    expect(chased.x + chased.width).toBeLessThanOrEqual(1241);
+    expect(chased.y + chased.height).toBeLessThanOrEqual(841);
+    if (point.side === 'left') expect(chased.x + chased.width).toBeLessThan(bounds.x - 20);
+    if (point.side === 'right') expect(chased.x).toBeGreaterThan(bounds.x + bounds.width + 20);
+    if (point.side === 'above') expect(chased.y + chased.height).toBeLessThan(bounds.y - 20);
+    if (point.side === 'below') expect(chased.y).toBeGreaterThan(bounds.y + bounds.height + 20);
+    await expect(marker).toBeVisible();
+    const held = await box(marker);
+    expect(Math.abs(held.x + held.width / 2 - point.x)).toBeLessThan(40);
+    expect(Math.abs(held.y + held.height / 2 - point.y)).toBeLessThan(40);
+  }
   expect(await box(card)).toEqual(bounds);
   await page.keyboard.press('Escape');
   await expect(takeBone).toHaveAttribute('aria-pressed', 'false');
   await expect(marker).toBeHidden();
+  await page.clock.runFor(5000);
+  await expectDocked(card, dog, roaming);
   await takeBone.click();
+  await page.clock.runFor(64);
+  await page.mouse.move(160, 150);
+  await page.clock.runFor(1600);
   await putAway.click();
   await expect(takeBone).toHaveAttribute('aria-pressed', 'false');
   await expect(marker).toBeHidden();
+  await page.clock.runFor(5000);
+  await expectDocked(card, dog, roaming);
+
+  await takeBone.click();
+  await page.clock.runFor(64);
+  await card.getByRole('button', { name: '最小化浮窗', exact: true }).click();
+  await page.clock.runFor(500);
+  await expect(roaming).toHaveCount(0);
+  await expect(marker).toHaveCount(0);
+  await expect(card).toHaveCount(0);
+  const companion = page.getByRole('button', { name: '双击狗狗恢复浮窗', exact: true });
+  await expect(companion).toBeVisible();
+  await companion.dblclick();
+  await page.clock.runFor(64);
+  await expect(card).toBeVisible();
+  await expect(dog).toBeVisible();
+  await expect(page.locator('.browser-chasing-dog:visible')).toHaveCount(0);
+  await expect(page.locator('.widget-dog:visible')).toHaveCount(1);
+});
+
+test('taking the bone again interrupts the return and dragging or resizing updates the landing ledge', async ({ page }) => {
+  const card = page.getByRole('region', { name: '工资悬浮窗' });
+  const dog = page.locator('.widget-dog');
+  const roaming = page.locator('.browser-chasing-dog');
+  const takeBone = card.getByRole('button', { name: '拿起骨头', exact: true });
+  await moveCard(page, card, 432, 320);
+  await takeBone.click();
+  await expect(roaming).toBeVisible();
+  await page.mouse.move(100, 100);
+  await page.clock.runFor(3000);
+  await card.getByRole('button', { name: '收起骨头', exact: true }).click();
+  await page.clock.runFor(32);
+  await expect(roaming).toBeVisible();
+  await takeBone.click();
+  await page.clock.runFor(64);
+  await expect(card.getByRole('button', { name: '收起骨头', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(roaming).toHaveCount(1);
+  await expect(dog).toBeHidden();
+  await moveCard(page, card, 300, 230);
+  await card.getByRole('button', { name: '浮窗设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '浮窗设置', exact: true });
+  await settings.getByLabel('浮窗大小', { exact: true }).press('End');
+  await settings.getByRole('button', { name: '返回浮窗', exact: true }).click();
+  await page.clock.runFor(64);
+  expect((await box(card)).width).toBeCloseTo(376 * 1.5, 0);
+  await page.keyboard.press('Escape');
+  await page.clock.runFor(5000);
+  await expectDocked(card, dog, roaming);
+  await expect(page.locator('.browser-chasing-dog:visible')).toHaveCount(0);
+  await expect(page.locator('.widget-dog:visible')).toHaveCount(1);
+});
+
+test('reduced motion places the browser dog at the pointer and returns it immediately', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const card = page.getByRole('region', { name: '工资悬浮窗' });
+  const dog = page.locator('.widget-dog');
+  const roaming = page.locator('.browser-chasing-dog');
+  await moveCard(page, card, 432, 320);
+  await card.getByRole('button', { name: '拿起骨头', exact: true }).click();
+  await page.mouse.move(100, 90);
+  await page.clock.runFor(32);
+  await expect(roaming).toBeVisible();
+  await expect(dog).toBeHidden();
+  const placed = await box(roaming);
+  expect(Math.abs(placed.x + placed.width / 2 - 100)).toBeLessThan(100);
+  expect(Math.abs(placed.y + placed.height / 2 - 90)).toBeLessThan(100);
+  await page.clock.runFor(1000);
+  expect(await box(roaming)).toEqual(placed);
+  await page.keyboard.press('Escape');
+  await page.clock.runFor(32);
+  await expectDocked(card, dog, roaming);
+  await expect(page.locator('.pet-held-bone')).toBeHidden();
 });
 
 test('hovering pauses the dog and offers image-only food choices that play a full meal', async ({ page }) => {

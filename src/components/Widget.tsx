@@ -7,6 +7,7 @@ import { duration, useClock } from '../lib/clock';
 import type { AppState, DesktopPetState, WidgetLayer } from '../lib/store';
 import LiveAmount from './LiveAmount';
 import WidgetPet from './WidgetPet';
+import BrowserChasingPet from './BrowserChasingPet';
 import WidgetSettings from './WidgetSettings';
 import { useWidgetAppearance } from '../lib/widget-appearance';
 import './widget.css';
@@ -83,7 +84,10 @@ function useBoneMode(api: Window['niuma']) {
     document.addEventListener('keydown', putAway);
     return () => document.removeEventListener('keydown', putAway);
   }, [chasing, change]);
-  return { native, chasing, state, change, error };
+  const setBrowserState = useCallback((value: DesktopPetState) => {
+    if (!native) apply(value);
+  }, [native, apply]);
+  return { native, chasing, state, change, error, setBrowserState };
 }
 
 function LensFilter({ id }: { id: string }) {
@@ -192,7 +196,7 @@ export default function Widget({ state, onRestore, onHide, preview = false, back
 
   return <div className="widget-shell" ref={shell} style={{ width: desktop ? `min(${layout.width}px, 100vw)` : layout.width * scale, height: desktop ? `min(${layout.cardHeight + layout.laneHeight}px, 100dvh)` : (layout.cardHeight + layout.laneHeight) * scale }}>
     <div className="widget-stack" style={{ ...widgetLayoutStyle, zoom: scale }}>
-    <WidgetPet chasing={!bone.native && bone.chasing} setChasing={bone.change}
+    <WidgetPet chasing={false} setChasing={bone.change}
       desktopState={bone.state} boneButton={boneButton} preview={preview} />
     {backdrop}
     {hasLensFilter && <LensFilter id={lensId} />}
@@ -226,5 +230,6 @@ export default function Widget({ state, onRestore, onHide, preview = false, back
       </>}
     </section>
     </div>
+    {!bone.native && <BrowserChasingPet active={bone.chasing} anchor={shell} boneButton={boneButton} onStateChange={bone.setBrowserState} />}
   </div>;
 }
