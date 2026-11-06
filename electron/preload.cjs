@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('niuma', {
   refreshCalendar: () => ipcRenderer.invoke('niuma:refresh-calendar'),
   getCalendarStatus: () => ipcRenderer.invoke('niuma:get-calendar-status'),
   showWidget: () => ipcRenderer.invoke('niuma:show-widget'),
+  minimizeWidget: (options) => ipcRenderer.invoke('niuma:minimize-widget', options),
   getWidgetLayer: () => ipcRenderer.invoke('niuma:get-widget-layer'),
   setWidgetLayer: (layer) => ipcRenderer.invoke('niuma:set-widget-layer', layer),
   onWidgetLayerChanged: (callback) => listen('niuma:widget-layer-changed', callback),

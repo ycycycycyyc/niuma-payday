@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// This renderer receives no salary data. Pet commands are checked by the owning surface.
+// This renderer receives no salary data. Its commands are limited to pet
+// interaction; the owning surface is checked by the main process.
 let latest;
 const listeners = new Set();
 let preparationPending = false;
@@ -25,8 +26,13 @@ contextBridge.exposeInMainWorld('petOverlay', {
     ipcRenderer.send('niuma:desktop-pet-surface-ready');
   },
   firstFramePainted: () => ipcRenderer.send('niuma:desktop-pet-first-paint'),
+  restoreWidget: () => ipcRenderer.send('niuma:desktop-pet-restore-widget'),
+  hold: () => ipcRenderer.send('niuma:desktop-pet-hold'),
   feed: food => {
     if (food === 'kibble' || food === 'stick') ipcRenderer.send('niuma:desktop-pet-feed', food);
+  },
+  setReducedMotion: reduced => {
+    if (typeof reduced === 'boolean') ipcRenderer.send('niuma:desktop-pet-motion-preference', reduced);
   },
   onFrame(listener) {
     listeners.add(listener);

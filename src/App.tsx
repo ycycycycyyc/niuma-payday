@@ -7,6 +7,8 @@ import SettingsModal from './components/SettingsModal';
 import LiveAmount from './components/LiveAmount';
 import Mascot from './components/Mascot';
 import Widget, { widgetLayoutStyle } from './components/Widget';
+import CompanionPet, { type CompanionOrigin } from './components/CompanionPet';
+import { companionOrigin } from './lib/companion-origin';
 import { classifyDay, dateKey, fetchCalendarYear } from '../shared/calendar.mjs';
 import { describeDesktopError, isDesktopHost } from './lib/desktop-error';
 import { version } from '../package.json';
@@ -48,6 +50,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
   const [browserWidget, setBrowserWidget] = useState(false);
+  const [browserCompanion, setBrowserCompanion] = useState<CompanionOrigin | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const setToast = (text: string) => setNotice({ text, error: false });
   const showError = (error: unknown, operation: string) => setNotice({ text: describeDesktopError(error, operation), error: true });
@@ -177,7 +180,11 @@ function App() {
 
   if (!loaded) return <div className="loading-state"><Flower2 size={28} /><span>正在唤醒你的工资…</span></div>;
   if (profileError) return <div className="connection-error" role="alert"><p>{profileError}</p><button className="button secondary" onClick={() => window.location.reload()}>重新连接</button></div>;
-  if (isWidget) return <Widget state={state} onRestore={() => void action(() => window.niuma!.restoreMain())} onHide={() => void action(() => window.niuma!.hideWidget())} />;
+  if (isWidget) return <Widget state={state} onRestore={() => void action(() => window.niuma!.restoreMain())}
+    onHide={async () => {
+      if (!window.niuma?.minimizeWidget) throw new Error('桌面连接需要更新，请从托盘退出后重新打开应用。');
+      await window.niuma.minimizeWidget({ reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches });
+    }} />;
 
   const restCard = <section className={`rest-card ${breakStart !== null ? 'is-resting' : ''}`}>
     <div className="card-top"><span className="section-label"><Coffee size={18} />带薪充电站</span></div>
@@ -283,7 +290,13 @@ function App() {
         });
       }}
       onLostPointerCapture={() => { drag.current = null; }}>
-      <Widget state={state} preview onRestore={() => setBrowserWidget(false)} onHide={() => setBrowserWidget(false)} />
+      <Widget state={state} preview onRestore={() => setBrowserWidget(false)} onHide={() => {
+        setBrowserCompanion(companionOrigin(document.querySelector('.browser-widget-host .widget-dog')));
+        setBrowserWidget(false);
+      }} />
+    </div>}
+    {browserCompanion && !browserWidget && <div style={{ position: 'fixed', inset: 0, zIndex: 60, pointerEvents: 'none' }}>
+      <CompanionPet origin={browserCompanion} onRestore={() => { setBrowserCompanion(null); setBrowserWidget(true); }} />
     </div>}
   </div>;
 }

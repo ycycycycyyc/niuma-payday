@@ -9,13 +9,38 @@ html, body {
 }
 #desktop-dog, #desktop-bone { position: absolute; left: 0; top: 0; }
 #desktop-dog {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 40%;
+  appearance: none;
+  opacity: 1;
+  pointer-events: none;
+  touch-action: manipulation;
   will-change: transform;
   background: url('./assets/widget-dog-actions.webp') no-repeat 0 center / 700% 100%;
 }
+#desktop-dog[data-interactive="true"] { pointer-events: auto; cursor: pointer; }
+#desktop-dog[data-feedable="true"] { pointer-events: auto; cursor: pointer; }
+#desktop-dog:focus { outline: none; }
+#desktop-dog:focus-visible { outline: 2px solid #785d62; outline-offset: 1px; }
 #desktop-dog[data-pose="walk"] {
   background-image: url('./assets/widget-dog-walk.webp');
   background-size: 400% 100%;
 }
+#desktop-dog[data-sheet="companion"] {
+  background-image: url('./assets/widget-dog-companion.png');
+  background-size: 400% 400%;
+}
+#desktop-dog[data-sheet="sleep"] {
+  background-image: url('./assets/widget-dog-sleep.png');
+  background-size: 600% 300%;
+}
+#desktop-dog[data-sheet="play"] {
+  background-image: url('./assets/widget-dog-play.png');
+  background-size: 400% 300%;
+}
+#desktop-dog[data-feeding="true"] { background-image: none; }
 #desktop-bone {
   display: grid;
   width: 28px;
@@ -24,6 +49,3 @@ html, body {
   filter: drop-shadow(0 1px 1px #674c394f);
 }
 #desktop-dog[hidden], #desktop-bone[hidden] { display: none; }
-
-#desktop-dog[data-feedable="true"] { pointer-events: auto; cursor: pointer; }
-#desktop-dog[data-feeding="true"] { background-image: none; }

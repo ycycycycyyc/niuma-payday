@@ -53,7 +53,9 @@ const appIcon = path.join(root, 'build', 'icon.png');
 const statePath = () => path.join(app.getPath('userData'), 'state.json');
 const desktopPath = () => path.join(app.getPath('userData'), 'desktop.json');
 const desktopPet = new DesktopPet({
-  root, developmentURL, getWidget: () => widgetShown ? widgetWindow : null, getHit: () => widgetPet,
+  root, developmentURL, getWidget: () => widgetWindow, getHit: () => widgetPet,
+  restoreWidget: () => showWidget(),
+  onCompanionFailure: () => { if (!quitting) void showWidget().catch(() => {}); },
   notify(state) {
     if (widgetWindow && !widgetWindow.isDestroyed() && !widgetWindow.webContents.isDestroyed()) {
       widgetWindow.webContents.send('niuma:desktop-pet-state', state);
@@ -219,10 +221,10 @@ function widgetCardPosition() {
   return { x, y: y + petLaneHeight(height / scale) * scale };
 }
 
-function stopWidgetPointerTracking() {
+function stopWidgetPointerTracking(keepCompanion = false) {
   clearInterval(lanePointerTimer);
   lanePointerTimer = undefined;
-  desktopPet.end();
+  if (!keepCompanion) desktopPet.end();
   lastPetPointer = null;
   if (widgetPet) widgetPet.chasing = false;
   if (widgetPassesClicks && widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setIgnoreMouseEvents(false);
@@ -418,7 +420,7 @@ async function createWidget() {
   });
   // AppKit also emits hide when another app merely covers the salary card.
   widgetWindow.on('hide', () => {
-    if (process.platform !== 'darwin' || app.isHidden()) stopWidgetPointerTracking();
+    if (process.platform !== 'darwin' || app.isHidden()) stopWidgetPointerTracking(desktopPet.state.phase === 'companion');
   });
   widgetWindow.on('show', () => {
     if (widgetShown && !lanePointerTimer) startWidgetPointerTracking();
@@ -458,6 +460,7 @@ async function showWidget(minimizeMain = true, mode = 'manual') {
       }
     }
     refitWidget();
+    desktopPet.dockCompanion();
     widgetShown = true;
     widgetWindow.showInactive();
     startWidgetPointerTracking();
@@ -491,6 +494,18 @@ function hideWidget(restoreWithoutTray = true) {
   dismissNativeWidget();
   // Without a tray, hiding the only visible window must not strand the application.
   if (restoreWithoutTray && !tray && mainWindow?.isMinimized()) restoreMain();
+}
+
+async function minimizeWidget(reducedMotion) {
+  if (!widgetShown || !widgetWindow || widgetWindow.isDestroyed()) return;
+  const request = ++widgetRequest;
+  // The card stays visible if the separate dog surface cannot be painted.
+  await desktopPet.startCompanion(reducedMotion, () => !quitting && request === widgetRequest);
+  if (quitting || request !== widgetRequest || desktopPet.state.phase !== 'companion') return;
+  widgetSession = dismissWidget(appState, new Date(), widgetSession);
+  widgetShown = false;
+  stopWidgetPointerTracking(true);
+  widgetWindow.hide();
 }
 
 function broadcastState() {
@@ -668,6 +683,10 @@ function installIPC() {
     }
     return desktopPet.setMode(value.active, value.reducedMotion);
   }));
+  ipcMain.handle('niuma:minimize-widget', widgetOnly(value => {
+    if (!isRecord(value) || typeof value.reducedMotion !== 'boolean') throw new Error('无效的浮窗最小化设置。');
+    return minimizeWidget(value.reducedMotion);
+  }));
   handle('niuma:get-state', () => appState);
   handle('niuma:set-privacy', hidden => {
     if (typeof hidden !== 'boolean') throw new Error('[SETTINGS_INVALID] 金额显隐设置无效。');
@@ -744,10 +763,10 @@ if (!app.requestSingleInstanceLock()) {
     createMainWindow();
     createTray();
     scheduleTimer = setInterval(backgroundTick, 15_000);
-    powerMonitor.on('resume', backgroundTick);
-    powerMonitor.on('unlock-screen', backgroundTick);
-    powerMonitor.on('lock-screen', () => desktopPet.end());
-    powerMonitor.on('suspend', () => desktopPet.end());
+    powerMonitor.on('resume', () => { desktopPet.resume(); backgroundTick(); });
+    powerMonitor.on('unlock-screen', () => { desktopPet.resume(); backgroundTick(); });
+    powerMonitor.on('lock-screen', () => desktopPet.suspend());
+    powerMonitor.on('suspend', () => desktopPet.suspend());
     void refreshCalendar().catch(error => console.warn('Unable to load holiday calendar:', error.message));
     screen.on('display-removed', refitWidget);
     screen.on('display-metrics-changed', refitWidget);

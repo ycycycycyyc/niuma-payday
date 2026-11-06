@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, GripHorizontal, Settings, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, GripHorizontal, Minus, Settings } from 'lucide-react';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import layout from '../../shared/widget-layout.json';
 import lensMap from '../assets/widget-lens-displacement.png?inline';
@@ -96,7 +96,7 @@ function LensFilter({ id }: { id: string }) {
   </svg>;
 }
 
-export default function Widget({ state, onRestore, onHide, preview = false, backdrop }: { state: AppState; onRestore: () => void; onHide: () => void; preview?: boolean; backdrop?: ReactNode }) {
+export default function Widget({ state, onRestore, onHide, preview = false, backdrop }: { state: AppState; onRestore: () => void; onHide: () => void | Promise<void>; preview?: boolean; backdrop?: ReactNode }) {
   const boneButton = useRef<HTMLButtonElement>(null);
   const settingsButton = useRef<HTMLButtonElement>(null);
   const shell = useRef<HTMLDivElement>(null);
@@ -108,6 +108,8 @@ export default function Widget({ state, onRestore, onHide, preview = false, back
   const [layer, setLayer] = useState<WidgetLayer | null>(null);
   const [changingLayer, setChangingLayer] = useState(false);
   const [layerError, setLayerError] = useState(false);
+  const [minimizing, setMinimizing] = useState(false);
+  const [minimizeError, setMinimizeError] = useState(false);
   const layerRevision = useRef(0);
 
   useLayoutEffect(() => {
@@ -141,6 +143,14 @@ export default function Widget({ state, onRestore, onHide, preview = false, back
     });
     return () => { layerRevision.current++; unsubscribe?.(); };
   }, [desktop]);
+
+  async function minimize() {
+    if (minimizing) return;
+    setMinimizing(true);
+    setMinimizeError(false);
+    try { await onHide(); } catch { setMinimizeError(true); }
+    finally { setMinimizing(false); }
+  }
 
   async function changeLayer() {
     if (!desktop?.setWidgetLayer || !desktop.getWidgetLayer || changingLayer) return;
@@ -190,7 +200,7 @@ export default function Widget({ state, onRestore, onHide, preview = false, back
       {settingsOpen ? <WidgetSettings value={appearance} onChange={update} onClose={closeSettings} status={appearanceStatus} onRetry={retry} /> : <>
       <div className="widget-head">
         <div className="widget-head-move">
-          {bone.error || layerError ? <span className="widget-status" role="status">{bone.error ? '骨头操作失败，可重试' : '层级操作失败，可重试'}</span> :
+          {bone.error || layerError || minimizeError ? <span className="widget-status" role="status">{minimizeError ? '最小化失败，请重试' : bone.error ? '骨头操作失败，可重试' : '层级操作失败，可重试'}</span> :
             <span className="widget-status"><i className={result.status === 'working' ? 'active' : ''} />{demo ? '演示数据' : result.statusLabel}</span>}
           <GripHorizontal size={18} className="widget-grip" aria-hidden="true" />
         </div>
@@ -205,7 +215,7 @@ export default function Widget({ state, onRestore, onHide, preview = false, back
             {layer === 'bottom' ? <ArrowUpToLine size={17} aria-hidden="true" /> : <ArrowDownToLine size={17} aria-hidden="true" />}
           </button>}
           <button onClick={onRestore} aria-label="返回主窗口" title="返回主窗口"><ArrowUpRight size={18} /></button>
-          <button onClick={onHide} aria-label="隐藏浮窗" title="隐藏浮窗"><X size={17} /></button>
+          <button onClick={() => void minimize()} disabled={minimizing} aria-label="最小化浮窗" title="最小化浮窗，双击狗狗恢复"><Minus size={17} /></button>
         </div>
       </div>
       <div className="widget-middle">

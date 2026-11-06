@@ -1,13 +1,23 @@
 import actions from './assets/widget-dog-actions.webp';
 import walk from './assets/widget-dog-walk.webp';
+import companion from './assets/widget-dog-companion.png';
+import sleeping from './assets/widget-dog-sleep.png';
+import playing from './assets/widget-dog-play.png';
 import type { PetPose } from './lib/pet-motion';
 import type { PetFeeding as PetFeedingState, PetFood } from '../shared/pet-feeding.mjs';
 import { createPetFeedingView } from './lib/pet-feeding-view';
 import './desktop-pet.css';
 
 type Point = { x: number; y: number };
-type Dog = Point & { size: number; facing: -1 | 1; frame: number; pose: PetPose; vx: number; vy: number; feedable?: boolean; reducedMotion?: boolean };
-type Frame = { dog: Dog | null; bone: Point | null; sampleTime: number; handoff?: boolean; feeding?: PetFeedingState | null; menuOpen?: boolean };
+type CompanionPose = 'lick' | 'play' | 'sleep' | 'sleep-side' | 'sleep-belly' | 'roll';
+type Dog = Point & {
+  size: number; facing: -1 | 1; frame: number; pose: PetPose | CompanionPose; vx: number; vy: number;
+  interactive?: boolean; feedable?: boolean; reducedMotion?: boolean;
+};
+type Frame = {
+  dog: Dog | null; bone: Point | null; sampleTime: number; handoff?: boolean;
+  feeding?: PetFeedingState | null; menuOpen?: boolean;
+};
 type Sample = { dog: Dog; time: number };
 
 declare global {
@@ -17,12 +27,15 @@ declare global {
       firstFramePainted(): void;
       onPrepare(listener: () => void): void;
       surfaceReady(): void;
+      restoreWidget?(): void;
+      hold?(): void;
       feed?(food: PetFood): void;
+      setReducedMotion?(reduced: boolean): void;
     };
   }
 }
 
-const sprite = document.getElementById('desktop-dog')!;
+const sprite = document.getElementById('desktop-dog') as HTMLButtonElement;
 const cursorBone = document.getElementById('desktop-bone')!;
 let currentFeeding: PetFeedingState | null = null;
 let foodMenuOpen = false;
@@ -34,11 +47,35 @@ const foodView = createPetFeedingView(document.body, {
   onMenuLeave() {},
 });
 window.addEventListener('pagehide', () => foodView.destroy(), { once: true });
-const artworkReady = Promise.all([walk, actions].map(src => {
+const artworkReady = Promise.all([walk, actions, companion, sleeping, playing].map(src => {
   const image = new Image();
   image.src = src;
   return image.decode();
 })).then(() => true, () => false);
+
+const sleepRows: Partial<Record<CompanionPose, number>> = { sleep: 0, 'sleep-side': 1, 'sleep-belly': 2 };
+const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
+const reportMotionPreference = () => window.petOverlay?.setReducedMotion?.(motionPreference.matches);
+reportMotionPreference();
+motionPreference.addEventListener('change', reportMotionPreference);
+
+const isInteractive = () => !sprite.hidden && sprite.dataset.interactive === 'true';
+function restoreWidget() {
+  if (isInteractive()) window.petOverlay?.restoreWidget?.();
+}
+sprite.addEventListener('pointerdown', event => {
+  if (isInteractive() && event.isPrimary && event.button === 0) window.petOverlay?.hold?.();
+});
+sprite.addEventListener('dblclick', event => {
+  event.preventDefault();
+  restoreWidget();
+});
+sprite.addEventListener('keydown', event => {
+  if (!event.repeat && (event.key === 'Enter' || event.key === ' ')) {
+    event.preventDefault();
+    restoreWidget();
+  }
+});
 
 // Keep most of one mouse sample in reserve. The sprite can then follow each
 // display refresh even when the native cursor timer fires between refreshes.
@@ -71,7 +108,14 @@ function paint(dog: Dog, x: number, y: number) {
   if (sprite.dataset.pose !== dog.pose || sprite.dataset.frame !== String(dog.frame)) {
     sprite.dataset.pose = dog.pose;
     sprite.dataset.frame = String(dog.frame);
-    sprite.style.backgroundPositionX = `${100 * dog.frame / (dog.pose === 'walk' ? 3 : 6)}%`;
+    const sleepRow = sleepRows[dog.pose as CompanionPose];
+    const sheet = sleepRow !== undefined ? 'sleep' : dog.pose === 'play' ? 'play'
+      : dog.pose === 'lick' || dog.pose === 'roll' ? 'companion' : dog.pose === 'walk' ? 'walk' : 'actions';
+    const column = sheet === 'play' ? dog.frame % 4 : dog.frame;
+    const row = sheet === 'play' ? Math.floor(dog.frame / 4) : sleepRow ?? (dog.pose === 'roll' ? 3 : 0);
+    sprite.dataset.sheet = sheet;
+    sprite.style.backgroundPositionX = `${100 * column / (sheet === 'actions' ? 6 : sheet === 'sleep' ? 5 : 3)}%`;
+    sprite.style.backgroundPositionY = sheet === 'walk' || sheet === 'actions' ? '50%' : `${100 * row / (sheet === 'companion' ? 3 : 2)}%`;
   }
   const size = `${dog.size}px`;
   if (sprite.style.width !== size) sprite.style.width = sprite.style.height = size;
@@ -83,7 +127,7 @@ function paint(dog: Dog, x: number, y: number) {
     anchor: { x, y, width: dog.size, height: dog.size },
     bounds: { x: 0, y: 0, width: innerWidth, height: innerHeight },
     facing: dog.facing, feeding: currentFeeding, open: foodMenuOpen,
-    reducedMotion: Boolean(dog.reducedMotion) || matchMedia('(prefers-reduced-motion: reduce)').matches,
+    reducedMotion: Boolean(dog.reducedMotion) || motionPreference.matches,
   });
 }
 
@@ -121,16 +165,30 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen 
     handoffSerial++;
     clearPath();
     sprite.hidden = true;
+    sprite.dataset.interactive = 'false';
     sprite.dataset.feedable = 'false';
     sprite.dataset.feeding = 'false';
+    sprite.disabled = true;
+    sprite.tabIndex = -1;
     foodView.render({
       anchor: { x: 0, y: 0, width: 0, height: 0 },
       bounds: { x: 0, y: 0, width: innerWidth, height: innerHeight },
-      facing: 1, feeding: null, open: false, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+      facing: 1, feeding: null, open: false, reducedMotion: motionPreference.matches,
     });
     return;
   }
+  // Switch hit and keyboard affordances immediately, even when a walking frame
+  // is briefly buffered for smooth movement.
+  sprite.dataset.interactive = String(Boolean(dog.interactive));
   sprite.dataset.feedable = String(Boolean(dog.feedable));
+  sprite.dataset.reducedMotion = String(Boolean(dog.reducedMotion) || motionPreference.matches);
+  const acceptsInput = Boolean(dog.interactive || dog.feedable);
+  sprite.disabled = !acceptsInput;
+  sprite.tabIndex = acceptsInput ? 0 : -1;
+  sprite.setAttribute('aria-hidden', String(!acceptsInput));
+  sprite.setAttribute('aria-label', dog.interactive ? '双击狗狗恢复浮窗' : '给狗狗喂食');
+  if (dog.interactive) sprite.title = '双击狗狗恢复浮窗';
+  else sprite.removeAttribute('title');
   if (handoff) {
     clearPath();
     const serial = ++handoffSerial;

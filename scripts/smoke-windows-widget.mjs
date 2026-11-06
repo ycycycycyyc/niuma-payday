@@ -174,7 +174,7 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
     });
     await main.evaluate(() => window.niuma.showWidget());
     await check('real hide button hides the native widget', async () => {
-      await click(button('隐藏浮窗'));
+      await click(button('最小化浮窗'));
       await expect.poll(async () => (await windowState()).visible).toBe(false);
     });
     if (!baseline) {

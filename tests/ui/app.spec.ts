@@ -43,7 +43,7 @@ test('a holiday stays off, manual work overrides it, and restoring the calendar 
   await page.getByRole('button', { name: '今天上班', exact: true }).click();
   await expect(page.locator('.earnings-card .amount-integer')).toHaveText('80');
   await expect(page.getByRole('region', { name: '工资悬浮窗' })).toBeVisible();
-  await page.getByRole('button', { name: '隐藏浮窗' }).click();
+  await page.getByRole('button', { name: '最小化浮窗' }).click();
   await page.getByRole('button', { name: '恢复日历', exact: true }).click();
   await expect(page.locator('.earnings-card .amount-integer')).toHaveText('0');
 });

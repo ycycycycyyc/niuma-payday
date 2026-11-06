@@ -56,7 +56,7 @@ async function widgetMetrics(page: Page) {
 
 async function widgetContrast(card: Locator) {
   const restore = card.getByRole('button', { name: '返回主窗口' }).locator('svg');
-  const hide = card.getByRole('button', { name: '隐藏浮窗' }).locator('svg');
+  const hide = card.getByRole('button', { name: '最小化浮窗' }).locator('svg');
   const result = {
     time: await textContrast(card.locator('.widget-time-value')),
     amount: await textContrast(card.locator('.amount-integer')),
@@ -155,7 +155,7 @@ test('maximum supported HKD salary, countdown and controls stay inside narrow wi
     expect(metrics.amountRight).toBeLessThanOrEqual(metrics.card.x + metrics.card.width - 10);
     expect(metrics.time.x + metrics.time.width).toBeLessThanOrEqual(width);
     expect(metrics.amountBottom).toBeLessThanOrEqual(metrics.time.y);
-    for (const name of ['浮窗设置', '返回主窗口', '隐藏浮窗']) {
+    for (const name of ['浮窗设置', '返回主窗口', '最小化浮窗']) {
       const button = page.getByRole('button', { name, exact: true });
       await expect(button).toBeVisible();
       const bounds = (await button.boundingBox())!;
@@ -327,7 +327,7 @@ test('standalone HTML runs from file offline, changes wallpaper, ticks and reope
     await page.screenshot({ path: path.join(output, dark ? 'offline-night.png' : 'offline-day.png'), animations: 'disabled' });
   }
   fs.writeFileSync(path.join(output, 'preview-contrast.json'), JSON.stringify(contrast, null, 2));
-  await card.getByRole('button', { name: '隐藏浮窗' }).click();
+  await card.getByRole('button', { name: '最小化浮窗' }).click();
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: '开启浮窗', exact: true }).click();
   await expect(card).toBeVisible();

@@ -2,7 +2,7 @@ import path from 'node:path';
 import { BrowserWindow, screen } from 'electron';
 import { petLaneHeight } from '../shared/widget-geometry.mjs';
 import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
-
+import { createCompanionMotion, stepCompanionMotion } from '../shared/desktop-pet-companion.mjs';
 import { createPetFeeding, stepPetFeeding, petFeedingMenuRect } from '../shared/pet-feeding.mjs';
 
 const BONE_SIZE = 28;
@@ -31,7 +31,7 @@ function createSurface(area, root, developmentURL) {
     backgroundColor: '#00000000', roundedCorners: false, hasShadow: false,
     focusable: false, skipTaskbar: true, resizable: false, movable: false,
     fullscreenable: false, maximizable: false, minimizable: false, useContentSize: true,
-    ...(process.platform === 'darwin' ? { type: 'panel', enableLargerThanScreen: true } : { thickFrame: false }),
+    ...(process.platform === 'darwin' ? { type: 'panel', acceptFirstMouse: true, enableLargerThanScreen: true } : { thickFrame: false }),
     webPreferences: {
       preload: path.join(root, 'electron', 'desktop-pet-preload.cjs'),
       contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false,
@@ -62,12 +62,14 @@ function createSurface(area, root, developmentURL) {
 }
 
 export class DesktopPet {
-  constructor({ root, developmentURL, getWidget, getHit, notify }) {
+  constructor({ root, developmentURL, getWidget, getHit, notify, restoreWidget, onCompanionFailure }) {
     this.root = root;
     this.developmentURL = developmentURL;
     this.getWidget = getWidget;
     this.getHit = getHit;
     this.notify = notify;
+    this.restoreWidget = restoreWidget;
+    this.onCompanionFailure = onCompanionFailure;
     this.state = { phase: 'docked' };
     this.surfaces = new Map();
   }
@@ -80,6 +82,8 @@ export class DesktopPet {
   end(landing) {
     const trip = this.trip;
     this.trip = null;
+    clearInterval(this.companionTimer);
+    this.companionTimer = undefined;
     trip?.cancelLaunch?.();
     const widget = landing && this.getWidget();
     const keep = widget && !widget.isDestroyed() ? screen.getDisplayMatching(widget.getBounds()).id : null;
@@ -91,6 +95,35 @@ export class DesktopPet {
       }
     }
     if (trip) this.publish({ phase: 'docked', ...landing });
+  }
+
+  dockCompanion() {
+    if (this.state.phase !== 'companion') return;
+    this.end({ dockX: this.trip.dockX, facing: this.trip.pet.facing });
+  }
+
+  async startCompanion(reducedMotion, isCurrent = () => true) {
+    // Reuse a current chase in place, or paint the card's dog before hiding it.
+    if (!this.trip?.ready) await this.setMode(true, reducedMotion);
+    const trip = this.trip;
+    if (!trip?.ready || !isCurrent()) return;
+    trip.reduced = reducedMotion;
+    const widget = this.getWidget();
+    if (!widget || widget.isDestroyed()) return;
+    trip.size = this.home(widget, trip).size;
+    const area = screen.getDisplayNearestPoint({ x: Math.round(trip.pet.x), y: Math.round(trip.pet.y) }).workArea;
+    trip.pet = createCompanionMotion(trip.pet, area, trip.size);
+    trip.lastTime = performance.now();
+    trip.holdUntil = 0;
+    this.publish({ phase: 'companion' });
+    this.tick(screen.getCursorScreenPoint());
+    this.companionTimer ??= setInterval(() => this.tick(screen.getCursorScreenPoint()), 24);
+  }
+
+  holdsCompanion(event, surface) {
+    if (this.state.phase !== 'companion' || !this.trip?.ready || !surface.shown || surface.win.isDestroyed()) return false;
+    const frame = surface.win.webContents.mainFrame;
+    return event.processId === frame.processId && event.frameId === frame.routingId;
   }
 
   holdsFeedingSurface(event, surface) {
@@ -164,6 +197,19 @@ export class DesktopPet {
     return u * u + v * v <= .46 * .46;
   }
 
+  tickCompanion(cursor) {
+    const trip = this.trip;
+    const now = performance.now();
+    const area = screen.getDisplayNearestPoint({ x: Math.round(trip.pet.x), y: Math.round(trip.pet.y) }).workArea;
+    const paused = this.hitsCompanion(cursor) || now < trip.holdUntil;
+    trip.pet = stepCompanionMotion(trip.pet, now - trip.lastTime, {
+      bounds: area, size: trip.size, paused, reducedMotion: trip.reduced,
+    });
+    trip.lastTime = now;
+    this.paint({ ...trip.pet, ...(paused || trip.reduced ? { vx: 0, vy: 0 } : {}) }, trip.size, null);
+    this.syncPetMouseRegion(cursor);
+  }
+
   prewarm() {
     const widget = this.getWidget();
     if (this.trip || !widget || widget.isDestroyed()) return;
@@ -179,6 +225,25 @@ export class DesktopPet {
     } catch (error) {
       console.warn('Unable to prepare the desktop pet:', error.message);
     }
+  }
+
+  suspend() {
+    if (this.state.phase !== 'companion') { this.end(); return; }
+    clearInterval(this.companionTimer);
+    this.companionTimer = undefined;
+    this.trip.suspended = true;
+    for (const surface of this.surfaces.values()) hideSurface(surface);
+  }
+
+  resume() {
+    if (this.state.phase !== 'companion' || !this.trip?.suspended) return;
+    this.trip.suspended = false;
+    this.trip.lastTime = performance.now();
+    if (this.trip.feeding) this.trip.feedingAt = this.trip.lastTime;
+    this.trip.menuOpen = false;
+    this.trip.menuUntil = 0;
+    this.tick(screen.getCursorScreenPoint());
+    this.companionTimer ??= setInterval(() => this.tick(screen.getCursorScreenPoint()), 24);
   }
 
   home(widget, trip) {
@@ -199,6 +264,9 @@ export class DesktopPet {
     const trip = this.trip;
     if (trip) {
       if (typeof reducedMotion === 'boolean') trip.reduced = reducedMotion;
+      // Hidden widget renderers can still report a preference change. That
+      // must not recall a companion into a card that remains minimized.
+      if (this.state.phase === 'companion') return this.state;
       if (trip.idleCursor) trip.lastTime = performance.now();
       trip.idleCursor = null;
       if (!trip.ready) {
@@ -300,7 +368,9 @@ export class DesktopPet {
     const failed = error => {
       if (this.surfaces.get(display.id) !== surface) return;
       console.warn('Unable to draw the desktop pet:', error.message);
+      const wasCompanion = this.state.phase === 'companion';
       this.end();
+      if (wasCompanion) this.onCompanionFailure?.();
     };
     surface.loading.then(() => {
       surface.ready = true;
@@ -325,6 +395,9 @@ export class DesktopPet {
     contents.ipc.on('niuma:desktop-pet-first-paint', event => {
       if (fromLaunchSurface(event)) this.trip.confirmFirstFrame?.();
     });
+    contents.ipc.on('niuma:desktop-pet-hold', event => {
+      if (this.holdsCompanion(event, surface)) this.trip.holdUntil = performance.now() + 900;
+    });
     contents.ipc.on('niuma:desktop-pet-feed', (event, food) => {
       if (!this.holdsFeedingSurface(event, surface) || this.trip.feeding || !this.trip.menuOpen ||
           this.menuGeometry()?.displayId !== display.id) return;
@@ -335,6 +408,19 @@ export class DesktopPet {
       this.trip.menuOpen = false;
       this.trip.idleCursor = null;
       this.tick(screen.getCursorScreenPoint());
+    });
+    contents.ipc.on('niuma:desktop-pet-restore-widget', event => {
+      if (!this.holdsCompanion(event, surface) || this.restoring) return;
+      this.restoring = true;
+      void Promise.resolve().then(() => this.restoreWidget?.()).catch(error => {
+        console.warn('Unable to restore the salary widget:', error.message);
+      }).finally(() => { this.restoring = false; });
+    });
+    contents.ipc.on('niuma:desktop-pet-motion-preference', (event, reduced) => {
+      const frame = contents.mainFrame;
+      if (typeof reduced !== 'boolean' || event.processId !== frame.processId || event.frameId !== frame.routingId) return;
+      surface.reduced = reduced;
+      if (this.trip) this.trip.reduced = reduced;
     });
     contents.on('render-process-gone', (_event, details) => failed(new Error(details.reason)));
     surface.win.on('closed', () => failed(new Error('桌面绘制窗口已关闭')));
@@ -361,6 +447,7 @@ export class DesktopPet {
   tick(cursor) {
     const trip = this.trip;
     if (!trip?.ready) return;
+    if (trip.suspended) return;
     const now = performance.now();
     if (this.tickFeeding(cursor, now)) {
       trip.lastTime = now;
@@ -368,6 +455,14 @@ export class DesktopPet {
       trip.pet = { ...trip.pet, vx: 0, vy: 0 };
       this.paint(trip.pet, trip.size, null);
       this.syncPetMouseRegion(cursor);
+      return;
+    }
+    if (this.state.phase === 'companion') {
+      try { this.tickCompanion(cursor); } catch (error) {
+        console.warn('Unable to animate the companion:', error.message);
+        this.end();
+        this.onCompanionFailure?.();
+      }
       return;
     }
     if (trip.idleCursor?.x === cursor.x && trip.idleCursor.y === cursor.y) {
@@ -424,8 +519,8 @@ export class DesktopPet {
       const bounds = win.getContentBounds();
       const frame = {
         dog: dogHere ? { x: left - bounds.x, y: top - bounds.y, size, facing: pet.facing, pose: pet.pose, frame: pet.frame,
-          vx: pet.vx, vy: pet.vy, feedable: ['chasing', 'companion'].includes(this.state.phase),
-          reducedMotion: Boolean(this.trip?.reduced) } : null,
+          vx: pet.vx, vy: pet.vy, interactive: this.state.phase === 'companion',
+          feedable: ['chasing', 'companion'].includes(this.state.phase), reducedMotion: Boolean(this.trip?.reduced) } : null,
         bone: boneHere ? { x: bone.x - bounds.x, y: bone.y - bounds.y } : null,
         feeding: dogHere ? this.trip?.feeding ?? null : null,
         menuOpen: Boolean(dogHere && this.trip?.menuOpen && this.menuGeometry(size)?.displayId === display.id),

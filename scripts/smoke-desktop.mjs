@@ -186,7 +186,7 @@ async function verifyDesktop() {
 
   await main.evaluate(() => window.niuma.showWidget());
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(true);
-  await clickWidgetControl('隐藏浮窗');
+  await clickWidgetControl('最小化浮窗');
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
   if (process.platform === 'darwin') {
     const invoked = await desktop.evaluate(({ Menu }) => {

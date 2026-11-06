@@ -6,7 +6,7 @@ import { migrateLegacyProfile } from '../../shared/profile-migration.mjs';
 
 export type AppState = { version: 3; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache };
 export type WidgetLayer = 'top' | 'bottom';
-export type DesktopPetState = { phase: 'docked' | 'chasing' | 'returning'; dockX?: number; facing?: 1 | -1 };
+export type DesktopPetState = { phase: 'docked' | 'chasing' | 'returning' | 'companion'; dockX?: number; facing?: 1 | -1 };
 export const DEFAULT_STATE: AppState = { version: 3, configured: false, settings: DEFAULT_SETTINGS, goal: { name: '今天的咖啡自由', amount: 25 }, privacy: false, calendar: {} };
 const KEY = 'niuma.payday.v3';
 
@@ -20,6 +20,7 @@ declare global {
       onStateChanged(callback: (state: unknown) => void): () => void;
       refreshCalendar(): Promise<{ status: string; message: string; calendar: CalendarCache }>;
       showWidget(): Promise<void>; hideWidget(): Promise<void>; restoreMain(): Promise<void>;
+      minimizeWidget?(options: { reducedMotion: boolean }): Promise<void>;
       getWidgetLayer?(): Promise<WidgetLayer>;
       setWidgetLayer?(layer: WidgetLayer): Promise<WidgetLayer>;
       onWidgetLayerChanged?(callback: (layer: WidgetLayer) => void): () => void;

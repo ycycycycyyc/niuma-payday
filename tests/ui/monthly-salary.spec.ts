@@ -35,7 +35,7 @@ test('HKD and mainland holidays are independent, with matching dashboard and wid
   await page.getByRole('button', { name: '开启悬浮窗', exact: true }).click();
   await expect(page.locator('.widget .amount-integer')).toHaveText('116');
   await expect(page.locator('.widget .amount-decimal')).toHaveText('.67');
-  await page.getByRole('button', { name: '隐藏浮窗' }).click();
+  await page.getByRole('button', { name: '最小化浮窗' }).click();
   await page.reload();
   await page.getByRole('button', { name: '工资与偏好设置' }).click();
   await expect(dialog.getByLabel('币种', { exact: true })).toHaveValue('HKD');

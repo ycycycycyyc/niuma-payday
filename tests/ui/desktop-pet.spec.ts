@@ -129,6 +129,111 @@ test('the first desktop pose is drawn before handoff and movement continues betw
   expect(await x()).toBeCloseTo(64);
 });
 
+test('only the companion dog accepts double-clicks and keyboard restoration', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame(listener) {
+        window.addEventListener('pet-frame', event => listener((event as CustomEvent).detail));
+        return () => {};
+      },
+      firstFramePainted() {},
+      onPrepare() {},
+      surfaceReady() {},
+      hold() { document.body.dataset.holds = String(Number(document.body.dataset.holds ?? 0) + 1); },
+      restoreWidget() { document.body.dataset.restores = String(Number(document.body.dataset.restores ?? 0) + 1); },
+    };
+  });
+  await page.goto('/pet.html');
+  const dog = page.getByRole('button', { name: '双击狗狗恢复浮窗' });
+  const frame = (interactive: boolean) => page.evaluate(value => window.dispatchEvent(new CustomEvent('pet-frame', {
+    detail: { sampleTime: performance.now(), dog: { x: 220, y: 250, size: 76, facing: 1, frame: 3, pose: 'sit', vx: 0, vy: 0, interactive: value }, bone: null },
+  })), interactive);
+
+  await frame(true);
+  await expect(dog).toHaveCSS('pointer-events', 'auto');
+  await expect(page.locator('body')).toHaveCSS('pointer-events', 'none');
+  await dog.click();
+  await expect(page.locator('body')).toHaveAttribute('data-holds', '1');
+  expect(await page.locator('body').getAttribute('data-restores')).toBeNull();
+  await dog.dblclick();
+  await expect(page.locator('body')).toHaveAttribute('data-holds', '3');
+  await expect(page.locator('body')).toHaveAttribute('data-restores', '1');
+  await dog.focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
+  await expect(page.locator('body')).toHaveAttribute('data-restores', '3');
+
+  await frame(false);
+  await expect(page.locator('#desktop-dog')).toHaveCSS('pointer-events', 'none');
+  await expect(page.locator('#desktop-dog')).toBeDisabled();
+  await expect(dog).toHaveCount(0);
+  await page.locator('#desktop-dog').dispatchEvent('dblclick');
+  await expect(page.locator('body')).toHaveAttribute('data-restores', '3');
+});
+
+test('companion actions use the licking, rolling, three sleeping poses and twelve play frames', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame(listener) {
+        window.addEventListener('pet-frame', event => listener((event as CustomEvent).detail));
+        return () => {};
+      },
+      firstFramePainted() {}, onPrepare() {}, surfaceReady() {},
+    };
+  });
+  await page.goto('/pet.html');
+  const dog = page.locator('#desktop-dog');
+  const cases = [
+    { pose: 'lick', frame: 2, sheet: 'companion', size: '400% 400%', x: 200 / 3, y: 0, asset: 'widget-dog-companion' },
+    { pose: 'roll', frame: 2, sheet: 'companion', size: '400% 400%', x: 200 / 3, y: 100, asset: 'widget-dog-companion' },
+    { pose: 'sleep', frame: 5, sheet: 'sleep', size: '600% 300%', x: 100, y: 0, asset: 'widget-dog-sleep' },
+    { pose: 'sleep-side', frame: 2, sheet: 'sleep', size: '600% 300%', x: 40, y: 50, asset: 'widget-dog-sleep' },
+    { pose: 'sleep-belly', frame: 4, sheet: 'sleep', size: '600% 300%', x: 80, y: 100, asset: 'widget-dog-sleep' },
+    ...Array.from({ length: 12 }, (_, frame) => ({
+      pose: 'play', frame, sheet: 'play', size: '400% 300%', x: frame % 4 * 100 / 3, y: Math.floor(frame / 4) * 50, asset: 'widget-dog-play',
+    })),
+  ];
+  for (const item of cases) {
+    await page.evaluate(value => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+      sampleTime: performance.now(), dog: { x: 220, y: 250, size: 76, facing: 1, frame: value.frame, pose: value.pose, vx: 0, vy: 0, interactive: true }, bone: null,
+    } })), { pose: item.pose, frame: item.frame });
+    await expect(dog).toHaveAttribute('data-sheet', item.sheet);
+    await expect(dog).toHaveAttribute('data-pose', item.pose);
+    await expect(dog).toHaveAttribute('data-frame', String(item.frame));
+    await expect(dog).toHaveCSS('background-size', item.size);
+    const position = await dog.evaluate(element => {
+      const css = getComputedStyle(element);
+      return { x: parseFloat(css.backgroundPositionX), y: parseFloat(css.backgroundPositionY), image: css.backgroundImage };
+    });
+    expect(position.x).toBeCloseTo(item.x, 3);
+    expect(position.y).toBeCloseTo(item.y, 3);
+    expect(position.image).toContain(item.asset);
+    await expect(page.locator('#desktop-bone')).toBeHidden();
+  }
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+    sampleTime: performance.now(), dog: { x: 220, y: 250, size: 76, facing: -1, frame: 5, pose: 'paw', vx: 0, vy: 0 }, bone: null,
+  } })));
+  await expect(dog).toHaveAttribute('data-sheet', 'actions');
+  await expect(dog).toHaveCSS('background-size', '700% 100%');
+  await expect(dog).toHaveCSS('background-position-y', '50%');
+  expect(await dog.evaluate(element => getComputedStyle(element).backgroundImage)).toContain('widget-dog-actions');
+});
+
+test('the desktop surface forwards initial and changed reduced-motion preferences', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame() { return () => {}; },
+      firstFramePainted() {}, onPrepare() {}, surfaceReady() {},
+      setReducedMotion(reduced) { document.body.dataset.motionPreference = String(reduced); },
+    };
+  });
+  await page.goto('/pet.html');
+  await expect(page.locator('body')).toHaveAttribute('data-motion-preference', 'true');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(page.locator('body')).toHaveAttribute('data-motion-preference', 'false');
+});
+
 test('desktop food options are images and both food choices reach only the pet bridge', async ({ page }) => {
   await page.addInitScript(() => {
     window.petOverlay = {

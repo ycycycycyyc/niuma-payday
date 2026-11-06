@@ -3,13 +3,15 @@ import { createRoot } from 'react-dom/client';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import './styles.css';
 import Widget, { widgetLayoutStyle } from './components/Widget';
+import CompanionPet, { type CompanionOrigin } from './components/CompanionPet';
+import { companionOrigin } from './lib/companion-origin';
 import { DEFAULT_STATE, normalizeState } from './lib/store';
 import { renderPreviewDashboard } from './preview-dashboard';
 import lensMap from './assets/widget-lens-displacement.png?inline';
 import './widget-preview.css';
 
 type Position = { x: number; y: number };
-type Surface = 'widget' | 'dashboard' | 'hidden';
+type Surface = 'widget' | 'dashboard' | 'hidden' | 'companion';
 
 // Reuse the export's inline bundle in an opaque frame, without a second network request.
 function dashboardDocument() {
@@ -141,6 +143,7 @@ function Preview() {
   const [profile, setProfile] = useState(DEFAULT_STATE);
   const [dashboard, setDashboard] = useState<{ html?: string } | null>(null);
   const [position, setPosition] = useState<Position | null>(null);
+  const [petOrigin, setPetOrigin] = useState<CompanionOrigin>({ x: 100, y: 100 });
   const field = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const dashboardFrame = useRef<HTMLIFrameElement>(null);
@@ -215,14 +218,18 @@ function Preview() {
     <div className="preview-field" ref={field}>
       {surface === 'widget' && <div className="preview-frame" ref={frame} style={{ ...widgetLayoutStyle, ...(position && { left: position.x, top: position.y, transform: 'none' }) }}
         onPointerDown={startDrag} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}>
-        <Widget state={profile} preview backdrop={<WallpaperLens position={position} />} onRestore={openDashboard} onHide={() => setSurface('hidden')} />
+        <Widget state={profile} preview backdrop={<WallpaperLens position={position} />} onRestore={openDashboard} onHide={() => {
+          setPetOrigin(companionOrigin(frame.current?.querySelector('.widget-dog') ?? null, field.current));
+          setSurface('companion');
+        }} />
       </div>}
+      {surface === 'companion' && <CompanionPet origin={petOrigin} onRestore={show} />}
       {dashboard && <iframe ref={dashboardFrame} title="主界面演示" className="preview-dashboard"
         hidden={surface !== 'dashboard'} srcDoc={dashboard.html}
         src={dashboard.html ? undefined : '#preview-dashboard'} sandbox={dashboard.html ? 'allow-scripts allow-forms' : undefined} />}
-      {surface === 'hidden' && <button type="button" className="preview-reopen" onClick={show}><Monitor size={16} />开启浮窗</button>}
+      {(surface === 'hidden' || surface === 'companion') && <button type="button" className="preview-reopen" onClick={show}><Monitor size={16} />开启浮窗</button>}
     </div>
-    <footer className="preview-bottom"><span>{surface === 'dashboard' ? '设置仅在本次预览中生效。' : surface === 'widget' ? '拖动浮窗，看看不同位置的光影。' : '浮窗已隐藏'}</span>
+    <footer className="preview-bottom"><span>{surface === 'dashboard' ? '设置仅在本次预览中生效。' : surface === 'widget' ? '拖动浮窗，看看不同位置的光影。' : surface === 'companion' ? '双击狗狗，唤回浮窗。' : '浮窗已隐藏'}</span>
       {position && surface === 'widget' && <button onClick={() => setPosition(null)}>回到中央</button>}
     </footer>
   </div>;
