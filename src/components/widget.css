@@ -25,57 +25,6 @@ body.widget-body { min-width: 0; overflow: hidden; }
 }
 .browser-widget-host:active { cursor: grabbing; }
 
-/* The dog's four-frame sprite walks on the card edge, with transparent space above it. */
-.widget-pet-lane {
-  --pet-size: 76px;
-  --patrol-time: 16s;
-  position: relative;
-  z-index: 1;
-  height: var(--lane-height);
-  pointer-events: none;
-}
-.widget-body .widget-pet-lane {
-  height: min(var(--lane-height), max(0px, calc(100dvh - var(--card-height))));
-  pointer-events: auto;
-  -webkit-app-region: no-drag;
-}
-.pet-traveller {
-  position: absolute;
-  left: 12px;
-  bottom: -2px;
-  width: calc(100% - var(--pet-size) - 24px);
-  pointer-events: none;
-  animation: pet-patrol var(--patrol-time) linear infinite;
-}
-.pet-facing { width: var(--pet-size); animation: pet-turn var(--patrol-time) step-end infinite; }
-.pet-sprite {
-  width: var(--pet-size);
-  height: var(--pet-size);
-  background: url('../assets/widget-dog-walk.webp') left center / 400% 100% repeat-x;
-  animation: pet-footsteps .8s steps(4, end) infinite;
-}
-@keyframes pet-patrol {
-  0%, 90%, 100% { transform: translateX(0); }
-  40%, 50% { transform: translateX(100%); }
-}
-@keyframes pet-turn {
-  0% { transform: scaleX(1); --stride-end: calc(-4 * var(--pet-size)); }
-  40% { transform: scaleX(1); --stride-end: 0px; }
-  46% { transform: scaleX(-1); --stride-end: 0px; }
-  50% { transform: scaleX(-1); --stride-end: calc(-4 * var(--pet-size)); }
-  90% { transform: scaleX(-1); --stride-end: 0px; }
-  96%, 100% { transform: scaleX(1); --stride-end: 0px; }
-}
-@keyframes pet-footsteps {
-  from { background-position-x: 0; }
-  to { background-position-x: var(--stride-end); }
-}
-.widget-pet-lane[data-paused] :is(.pet-traveller, .pet-facing, .pet-sprite) { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) {
-  .widget-pet-lane :is(.pet-traveller, .pet-facing, .pet-sprite) { animation: none; }
-  .pet-sprite { background-position-x: calc(-1 * var(--pet-size)); }
-}
-
 .widget {
   position: relative;
   isolation: isolate;

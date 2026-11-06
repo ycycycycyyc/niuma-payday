@@ -32,6 +32,8 @@ let desktopState = {};
 let positionTimer;
 let lanePointerTimer;
 let widgetPassesClicks = false;
+let widgetPet = null;
+let lastPetPointer = null;
 let scheduleTimer;
 let widgetSession = createWidgetSession();
 let widgetRequest = 0;
@@ -194,18 +196,40 @@ function widgetCardPosition() {
 function stopWidgetPointerTracking() {
   clearInterval(lanePointerTimer);
   lanePointerTimer = undefined;
+  lastPetPointer = null;
+  if (widgetPet) widgetPet.chasing = false;
   if (widgetPassesClicks && widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setIgnoreMouseEvents(false);
   widgetPassesClicks = false;
+}
+
+function hitsWidgetPet(x, y) {
+  if (!widgetPet?.width || !widgetPet.height) return false;
+  const u = (x - widgetPet.left) / widgetPet.width;
+  const v = (y - widgetPet.top) / widgetPet.height;
+  // Match the dog button's 40% corner radius so its transparent corners stay click-through.
+  const radius = .4;
+  const dx = Math.max(radius - u, 0, u - (1 - radius));
+  const dy = Math.max(radius - v, 0, v - (1 - radius));
+  return dx * dx + dy * dy <= radius * radius;
 }
 
 function syncWidgetMouseRegion() {
   if (process.platform !== 'win32' && process.platform !== 'darwin') return;
   const cursor = screen.getCursorScreenPoint();
   const { x, y, width, height } = widgetWindow.getBounds();
-  const overLane = cursor.x >= x && cursor.x < x + width && cursor.y >= y && cursor.y < y + petLaneHeight(height);
-  if (overLane !== widgetPassesClicks) {
-    widgetWindow.setIgnoreMouseEvents(overLane);
-    widgetPassesClicks = overLane;
+  // Electron screen and window geometry are DIP; renderer rectangles are CSS pixels.
+  const zoom = widgetWindow.webContents.getZoomFactor();
+  const localX = (cursor.x - x) / zoom;
+  const localY = (cursor.y - y) / zoom;
+  const overLane = localX >= 0 && localX < width / zoom && localY >= 0 && localY < petLaneHeight(height / zoom);
+  const passClicks = overLane && !hitsWidgetPet(localX, localY);
+  if (passClicks !== widgetPassesClicks) {
+    widgetWindow.setIgnoreMouseEvents(passClicks);
+    widgetPassesClicks = passClicks;
+  }
+  if (widgetPet?.chasing && (localX !== lastPetPointer?.x || localY !== lastPetPointer?.y)) {
+    lastPetPointer = { x: localX, y: localY };
+    widgetWindow.webContents.send('niuma:widget-pointer', lastPetPointer);
   }
 }
 
@@ -267,7 +291,8 @@ async function createWidget() {
     }
   });
   widgetWindow.on('hide', stopWidgetPointerTracking);
-  widgetWindow.on('closed', () => { widgetWindow = undefined; stopWidgetPointerTracking(); });
+  widgetWindow.webContents.on('did-start-loading', () => { widgetPet = null; lastPetPointer = null; });
+  widgetWindow.on('closed', () => { widgetWindow = undefined; widgetPet = null; stopWidgetPointerTracking(); });
   const createdWindow = widgetWindow;
   try {
     await loadWindow(createdWindow, true);
@@ -442,6 +467,20 @@ function createTray() {
 }
 
 function installIPC() {
+  ipcMain.on('niuma:set-widget-pet', (event, state) => {
+    if (!widgetWindow || event.sender?.id !== widgetWindow.webContents.id || !isTrustedIpc(event, ownedContents, isAllowedURL)) return;
+    if (!isRecord(state) || typeof state.chasing !== 'boolean') return;
+    const { left, top, width, height } = state;
+    if (![left, top, width, height].every(Number.isFinite) || width < 0 || height < 0
+      || width > widgetLayout.width || height > fullWidgetHeight) return;
+    const chasing = state.chasing && widgetWindow.isVisible();
+    const startedChasing = chasing && !widgetPet?.chasing;
+    widgetPet = { left, top, width, height, chasing };
+    if (startedChasing) {
+      lastPetPointer = null;
+      syncWidgetMouseRegion();
+    }
+  });
   const handle = (channel, callback) => ipcMain.handle(channel, (event, ...args) => {
     validateSender(event);
     return callback(...args);

@@ -15,6 +15,8 @@ declare global {
       onStateChanged(callback: (state: unknown) => void): () => void;
       refreshCalendar(): Promise<{ status: string; message: string; calendar: CalendarCache }>;
       showWidget(): Promise<void>; hideWidget(): Promise<void>; restoreMain(): Promise<void>;
+      setWidgetPet(state: { left: number; top: number; width: number; height: number; chasing: boolean }): void;
+      onWidgetPointer(callback: (point: { x: number; y: number }) => void): () => void;
       minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void>;
       onWindowState(callback: (state: { maximized: boolean }) => void): () => void;
     };

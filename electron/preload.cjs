@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('niuma', {
   refreshCalendar: () => ipcRenderer.invoke('niuma:refresh-calendar'),
   getCalendarStatus: () => ipcRenderer.invoke('niuma:get-calendar-status'),
   showWidget: () => ipcRenderer.invoke('niuma:show-widget'),
+  setWidgetPet: (state) => ipcRenderer.send('niuma:set-widget-pet', state),
+  onWidgetPointer: (callback) => listen('niuma:widget-pointer', callback),
   hideWidget: () => ipcRenderer.invoke('niuma:hide-widget'),
   restoreMain: () => ipcRenderer.invoke('niuma:restore-main'),
   minimize: () => ipcRenderer.invoke('niuma:minimize'),

@@ -95,6 +95,41 @@ try {
   await widget.screenshot({ path: path.join(artifacts, 'native-widget.png'), fullPage: false });
   record(`manual floating widget is visible, always on top, with a ${widgetLayout.laneHeight} px pet lane and ${card.width}×${card.height} card; main minimized`);
 
+  const dog = widget.getByRole('button', { name: '和狗狗握手', exact: true });
+  const dogBox = await dog.boundingBox();
+  assert.ok(dogBox);
+  await widget.mouse.click(dogBox.x + dogBox.width / 2, dogBox.y + dogBox.height / 2);
+  await expect(dog).toHaveAttribute('data-pose', 'paw');
+  record('targeted pointer input in the native widget plays the seated handshake');
+
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    const originalCursor = await desktop.evaluateHandle(({ screen }) => screen.getCursorScreenPoint);
+    try {
+      // Only this isolated Electron process reads a fixture coordinate; the OS pointer never moves.
+      await desktop.evaluate(({ BrowserWindow, screen }) => {
+        const win = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('#/widget'));
+        const { x, y } = win.getBounds();
+        screen.getCursorScreenPoint = () => ({ x: x + 147, y: y + 112 });
+      });
+      const [point] = await Promise.all([
+        widget.evaluate(() => new Promise((resolve, reject) => {
+          const off = window.niuma.onWidgetPointer(value => { clearTimeout(timer); off(); resolve(value); });
+          const timer = setTimeout(() => { off(); reject(new Error('No initial native pet pointer received')); }, 4000);
+        })),
+        widget.getByRole('button', { name: '拿起骨头', exact: true }).click(),
+      ]);
+      assert.deepEqual(point, { x: 147, y: 112 });
+      await expect(widget.locator('.pet-held-bone')).toBeVisible();
+      await widget.keyboard.press('Escape');
+      await expect(widget.getByRole('button', { name: '拿起骨头', exact: true })).toHaveAttribute('aria-pressed', 'false');
+      await expect(widget.locator('.pet-held-bone')).toBeHidden();
+      record('native widget receives the first local cursor coordinate for the bone and puts it away on Escape');
+    } finally {
+      await desktop.evaluate(({ screen }, original) => { screen.getCursorScreenPoint = original; }, originalCursor);
+      await originalCursor.dispose();
+    }
+  }
+
   await widget.getByRole('button', { name: '返回主窗口', exact: true }).click();
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
   await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.minimized).toBe(false);

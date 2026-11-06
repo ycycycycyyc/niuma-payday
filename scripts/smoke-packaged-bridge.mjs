@@ -120,6 +120,7 @@ class BrowserWindow extends EventEmitter {
         return this.url;
       },
       getType: () => 'window',
+      getZoomFactor: () => 1,
       isDestroyed: () => false,
       setWindowOpenHandler: noop,
       session: { setPermissionCheckHandler: noop, setPermissionRequestHandler: noop },
@@ -137,7 +138,7 @@ class BrowserWindow extends EventEmitter {
     this.bridgeEvents = new EventEmitter();
     this.documentEvents = new EventEmitter();
     const ipcRenderer = Object.assign(this.bridgeEvents, {
-      send: channel => ipcMain.emit(channel, { sender: this.webContents, senderFrame: frameFor(this) }),
+      send: (channel, ...args) => ipcMain.emit(channel, { sender: this.webContents, senderFrame: frameFor(this) }, ...structuredClone(args)),
       invoke: async (channel, ...args) => {
         const senderFrame = frameFor(this);
         const event = {
@@ -334,6 +335,40 @@ try {
       await new Promise(resolve => setTimeout(resolve, 70));
       assert.equal(widget.mouseIgnored, false);
       pass('packaged widget passes pet-lane clicks through and restores card hit testing without DOM mouse events');
+      if (widgetApi.setWidgetPet) {
+        const settlePointer = () => new Promise(resolve => setTimeout(resolve, 70));
+        const pet = { left: 46, top: 8, width: 60, height: 58, chasing: false };
+        const points = [];
+        const off = widgetApi.onWidgetPointer(point => points.push(point));
+        cursor = { x: bounds.x + 76, y: bounds.y + 37 };
+        api.setWidgetPet({ ...pet, chasing: true });
+        ipcMain.emit('niuma:set-widget-pet', { sender: widget.webContents, senderFrame: frameFor(widget, true) }, { ...pet, chasing: true });
+        widgetApi.setWidgetPet({ ...pet, top: NaN, chasing: true });
+        await settlePointer();
+        assert.equal(widget.mouseIgnored, true);
+        assert.equal(points.length, 0);
+        widgetApi.setWidgetPet(pet);
+        await settlePointer();
+        assert.equal(widget.mouseIgnored, false);
+        cursor = { x: bounds.x + pet.left, y: bounds.y + pet.top };
+        await settlePointer();
+        assert.equal(widget.mouseIgnored, true);
+        assert.equal(points.length, 0);
+        widgetApi.setWidgetPet({ ...pet, chasing: true });
+        assert.deepEqual(points, [{ x: pet.left, y: pet.top }]);
+        cursor = { x: bounds.x - 240, y: bounds.y + bounds.height + 20 };
+        await settlePointer();
+        assert.deepEqual(points.at(-1), { x: -240, y: bounds.height + 20 });
+        assert.equal(points.length, 2);
+        await widgetApi.hideWidget();
+        widgetApi.setWidgetPet({ ...pet, chasing: true });
+        await api.showWidget();
+        cursor.x += 40;
+        await settlePointer();
+        assert.equal(points.length, 2);
+        off();
+        pass('only the dog captures clicks; chase receives distinct widget-local cursor positions including outside, and stops on hide');
+      }
     }
     pass('floating window preserves the legacy card position across display changes');
   }
