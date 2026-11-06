@@ -175,6 +175,7 @@ class BrowserWindow extends EventEmitter {
 
   show() {
     this.visible = true;
+    this.emit('show');
   }
 
   showInactive() {
@@ -243,6 +244,15 @@ class BrowserWindow extends EventEmitter {
     this.mouseForwarded = options?.forward === true;
   }
   setAlwaysOnTop(...args) { this.nativeLayerArgs = args; }
+  setFocusable(value) { this.focusable = value; }
+  setSkipTaskbar(value) { this.skipTaskbar = value; }
+  getNativeWindowHandle() {
+    const handle = Buffer.alloc(8);
+    handle.writeUInt32LE(this.id);
+    return handle;
+  }
+  hookWindowMessage(message, callback) { this.on(String(message), callback); }
+  unhookWindowMessage(message) { this.removeAllListeners(String(message)); }
   setVisibleOnAllWorkspaces() {}
 }
 
@@ -260,9 +270,31 @@ globalThis.__niumaElectronTestHost = electronHost;
 const exportsList = Object.keys(electronHost).join(', ');
 const hostModule = 'export const {' + exportsList + '} = globalThis.__niumaElectronTestHost;';
 const hostURL = 'data:text/javascript,' + encodeURIComponent(hostModule);
+// Model the desktop and one normal window without passing simulated HWNDs to Windows.
+const nativePath = path.join(path.dirname(root), 'native', 'koffi.node');
+if (process.platform === 'win32') process.resourcesPath = path.dirname(root);
+const simulatedUser32 = {
+  GetShellWindow: () => 300,
+  FindWindowExW: () => 301,
+  GetWindow: () => 200,
+  GetWindowLongW: () => 0,
+  SetWindowPos(hwnd, after, x, y, w, h, flags) {
+    const window = BrowserWindow.fromId(hwnd);
+    assert.ok(window);
+    assert.equal(after, 200);
+    assert.equal(flags, 0x13);
+    window.lowered = true;
+    return 1;
+  },
+};
+globalThis.__niumaUser32 = simulatedUser32;
+const koffiMock = path.join(work, 'simulated-user32.cjs');
+fs.writeFileSync(koffiMock,
+  "exports.load = () => ({ func(signature) { return globalThis.__niumaUser32[signature.match(/stdcall (\\w+)\\(/)[1]]; } });");
 const hook = registerHooks({
   resolve(specifier, context, next) {
     if (specifier === 'electron') return { url: hostURL, shortCircuit: true };
+    if (specifier === nativePath) return { url: pathToFileURL(koffiMock).href, shortCircuit: true };
     return next(specifier, context);
   },
 });
@@ -389,6 +421,10 @@ try {
     await assert.rejects(async () => changeLayer({ ...childEvent, sender: new EventEmitter() }, 'bottom'));
     assert.equal(await widgetApi.setWidgetLayer('bottom'), 'bottom');
     assert.deepEqual(widget.nativeLayerArgs, bottomArgs);
+    if (process.platform === 'win32' && fs.existsSync(path.join(root, 'electron/windows-widget-layer.mjs'))) {
+      assert.equal(widget.lowered, true);
+      assert.equal(widget.focusable, false);
+    }
     assert.deepEqual(layers, ['top', 'bottom']);
     assert.equal(await api.getWidgetLayer(), 'bottom');
     const recover = trayMenu.find(item => item.label === '将浮窗置顶').click;
@@ -401,6 +437,10 @@ try {
     assert.equal(widget.isVisible(), true);
     assert.equal(await widgetApi.getWidgetLayer(), 'top');
     assert.deepEqual(widget.nativeLayerArgs, [true, 'floating']);
+    if (widget.lowered) {
+      assert.equal(widget.focusable, true);
+      assert.equal(widget.skipTaskbar, true);
+    }
     assert.deepEqual(layers, ['top', 'bottom', 'top']);
     stopListening();
     await widgetApi.setWidgetLayer('bottom');
