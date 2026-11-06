@@ -64,6 +64,11 @@ async function verifyDesktop() {
   assert.equal(saved.settings.dailySalary, 680);
   assert.equal(saved.settings.startTime, '09:00');
   assert.equal(saved.settings.endTime, '18:00');
+  await expect(main.locator('.page-heading p, .stat-card p')).toHaveCount(0);
+  await expect(main.locator('.stat-label')).toHaveText(['本月已赚', '距离下班', '下次发薪日']);
+  await expect(main.locator('.track-caption')).toHaveText('全时段计薪');
+  await expect(main.locator('.calendar-status')).not.toContainText(/已更新|已缓存/);
+  record('dashboard retains the three primary values without redundant captions or calendar success text');
   const invalid = await main.evaluate(async () => {
     const state = await window.niuma.getState();
     try { await window.niuma.setState({ ...state, settings: { ...state.settings, dailySalary: -1 } }); return 'accepted'; }
@@ -157,6 +162,15 @@ async function verifyDesktop() {
     else if (windowsNative) await native.click(button);
     else await button.click();
   };
+  await clickWidgetControl('隐藏金额');
+  await expect(widget.locator('.amount-integer')).toHaveText('••••');
+  await expect(main.locator('.earnings-card .amount-integer')).toHaveText('••••');
+  await expect(widget.locator('.widget-time-value')).toBeVisible();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'state.json'), 'utf8')).privacy, true);
+  await clickWidgetControl('显示金额');
+  await expect(widget.locator('.amount-integer')).toHaveText(/\d/);
+  await expect(main.locator('.earnings-card .amount-integer')).toHaveText(/\d/);
+  record('native widget eye button hides and restores earnings in both windows, preserves the timer and saves privacy');
   await clickWidgetControl('返回主窗口');
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
   await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.minimized).toBe(false);
