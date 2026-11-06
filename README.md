@@ -1,10 +1,12 @@
 # 牛马鼓励器 · 薪动
 
-让上班时的工资实时跳动，最小化后在桌面一角陪伴你。使用 React、TypeScript、Vite 和 Electron，提供 Windows / macOS 构建配置。
+让上班时的工资实时跳动，最小化后在桌面一角陪伴你。主要使用平台是 macOS，同时提供 Windows 版。
 
 ## 开始使用
 
-Windows x64 的免安装版为 `Niuma-1.1.0-windows-x64-portable.exe`。如已运行旧版，请先从系统托盘的牛马鼓励器菜单选择「退出」，再双击新版程序。
+**Mac** 用户可以从苹果菜单打开「关于本机」。如果「芯片」显示 Apple M 系列，选择 `mac-arm64.dmg` 结尾的文件。如果「处理器」显示 Intel，选择 `mac-x64.dmg` 结尾的文件。打开 DMG，把「牛马鼓励器」拖进「应用程序」，然后从那里启动。更新前，先在菜单栏的小牛菜单中选择「退出」。[Mac 安装包（私有仓库）](https://github.com/ycycycycyyc/niuma-payday/releases/tag/macos-v1.1.1)
+
+**Windows** 用户可双击 `Niuma-1.1.0-windows-x64-portable.exe`。如已运行旧版，请先从系统托盘的牛马鼓励器菜单选择「退出」。
 
 从源码运行：
 
@@ -39,7 +41,9 @@ npm run dev
 
 联网请求只获取公共日历，不上传工资、目标或个人设置。
 
-## 浮窗与托盘
+## 浮窗、Mac 菜单栏与 Windows 托盘
+
+- 在 Mac 上，点击菜单栏小牛图标，可以显示或隐藏工资浮窗、返回主窗口或退出应用。浮窗使用原生面板，点小狗和骨头按钮时可直接触发第一次点击。
 
 - Windows、macOS 和网页共用同一个浮窗组件。标准卡片为 376 × 200 逻辑像素，小牛为 92 × 92，下班倒计时使用 31 像素的等宽数字。主界面工资卡和玻璃采用从参考图取样的淡粉色 `#FDEDF4`。玻璃中央用 13% 不透明度，弧形边缘保留反光。浏览器演示对同页桌布做折射；独立桌面浮窗透出其他窗口原本的内容，不需要屏幕录制权限。
 
@@ -78,13 +82,13 @@ npx electron-builder --win --x64 --publish never
 
 # macOS Apple Silicon（在 macOS 上执行）
 npm run build
-npx electron-builder --mac --arm64 --publish never
+npx electron-builder --mac dmg zip --arm64 --publish never
 
 # macOS Intel（在 macOS 上执行）
-npx electron-builder --mac --x64 --publish never
+npx electron-builder --mac dmg zip --x64 --publish never
 ```
 
-仓库包含 GitHub Actions 桌面构建工作流，可手动运行或通过 `v*` 标签触发。应在各目标系统原生构建并实测；**macOS 真机运行尚未验证**。当前配置未包含代码签名证书与 Apple 公证，公众分发前需要另行配置。当前已生成 Windows x64 免安装文件，其他平台命令仅表示构建方法。
+在私有仓库手动运行 `Desktop builds` 时，默认分别使用 Apple Silicon 和 Intel 的 macOS 构建机。每个任务校验 DMG 和 ZIP 的架构及签名，再从交付 ZIP 中启动应用做原生测试。当前 Mac 包使用供内部测试的本地签名（ad-hoc），尚未通过 Apple 公证。
 
 ## 主要文件
 
