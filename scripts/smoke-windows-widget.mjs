@@ -51,13 +51,32 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
     const args = [action, ...(point ? [point.x, point.y] : []), ...(hwnd ? [hwnd] : [])].map(String);
     return (await run(tool, args, { windowsHide: true, timeout: 5000 })).stdout.trim();
   };
-  const state = await desktop.evaluate(({ BrowserWindow, screen }) => {
+  const pin = await center(widget.getByRole('button', { name: baseline ? '拿起骨头' : '将浮窗置底', exact: true }));
+  const state = await desktop.evaluate(({ BrowserWindow, screen }, pin) => {
     const w = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().endsWith('#/widget'));
     const area = screen.getPrimaryDisplay().workArea;
     const bounds = w.getBounds();
-    w.setPosition(Math.round(area.x + (area.width - bounds.width) / 2), Math.round(area.y + (area.height - bounds.height) / 2));
-    return { hwnd: Number(w.getNativeWindowHandle().readBigUInt64LE()), width: bounds.width, height: bounds.height };
-  });
+    const zoom = w.webContents.getZoomFactor();
+    const places = [];
+    for (const fy of [0, 1, 0.5]) for (const fx of [1, 0, 0.5]) {
+      const x = area.x + Math.round(70 + fx * (area.width - bounds.width - 94));
+      const y = area.y + Math.round(48 + fy * (area.height - bounds.height - 72));
+      const probe = screen.dipToScreenPoint({ x: Math.round(x + pin.x * zoom), y: Math.round(y + pin.y * zoom) });
+      places.push({ x, y, probe });
+    }
+    return { hwnd: Number(w.getNativeWindowHandle().readBigUInt64LE()), width: bounds.width, height: bounds.height, places };
+  }, pin);
+  // Some hosted images leave a non-minimizable system settings dialog open.
+  // Pick a point actually on Explorer's desktop, before putting our widget there.
+  let exposed;
+  for (const place of state.places) {
+    const cls = await invoke('root-class', place.probe);
+    if (['WorkerW', 'Progman'].includes(cls)) { exposed = place; break; }
+  }
+  assert.ok(exposed, 'Need a point on the exposed Explorer desktop to verify the bottom window');
+  await desktop.evaluate(({ BrowserWindow }, { x, y }) => {
+    BrowserWindow.getAllWindows().find(w => w.webContents.getURL().endsWith('#/widget')).setPosition(x, y);
+  }, exposed);
   const origin = await nativePoint(desktop, { x: 0, y: 0 });
   const end = await nativePoint(desktop, { x: state.width, y: state.height });
   const cover = spawn(tool, ['cover', origin.x - 20, origin.y - 20, end.x - origin.x + 40, end.y - origin.y + 40].map(String), { windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] });

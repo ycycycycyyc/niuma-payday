@@ -198,6 +198,7 @@ class WidgetInput {
         }
         Point point = new Point(x, y);
         if (action == "hit") { Console.WriteLine(Hit(point)); return; }
+        if (action == "root-class") { Console.WriteLine(ClassOf(new IntPtr(Hit(point)))); return; }
         Move(x, y);
         if (action == "move") return;
         long expected = long.Parse(args[3]);
