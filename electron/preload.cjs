@@ -1,17 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-if (location.hash === '#/widget' && (process.platform === 'win32' || process.platform === 'darwin')) {
-  // The widget mounts after its saved state loads; capture also covers later remounts.
-  const onLaneBoundary = event => {
-    const classes = event.target.classList;
-    if (event.isTrusted && (classes?.contains('widget-pet-lane') || classes?.contains('connection-error'))) {
-      ipcRenderer.send('niuma:widget-pointer-crossed');
-    }
-  };
-  document.addEventListener('mouseenter', onLaneBoundary, true);
-  document.addEventListener('mouseleave', onLaneBoundary, true);
-}
-
 const listen = (channel, callback) => {
   if (typeof callback !== 'function') throw new TypeError('Expected a callback.');
   const handler = (_event, value) => callback(value);

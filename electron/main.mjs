@@ -30,6 +30,8 @@ let quitting = false;
 let appState = null;
 let desktopState = {};
 let positionTimer;
+let lanePointerTimer;
+let widgetPassesClicks = false;
 let scheduleTimer;
 let widgetSession = createWidgetSession();
 let widgetRequest = 0;
@@ -189,19 +191,36 @@ function widgetCardPosition() {
   return { x, y: y + petLaneHeight(height) };
 }
 
+function stopWidgetPointerTracking() {
+  clearInterval(lanePointerTimer);
+  lanePointerTimer = undefined;
+  if (widgetPassesClicks && widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setIgnoreMouseEvents(false);
+  widgetPassesClicks = false;
+}
+
 function syncWidgetMouseRegion() {
   if (process.platform !== 'win32' && process.platform !== 'darwin') return;
   const cursor = screen.getCursorScreenPoint();
   const { x, y, width, height } = widgetWindow.getBounds();
   const overLane = cursor.x >= x && cursor.x < x + width && cursor.y >= y && cursor.y < y + petLaneHeight(height);
-  if (overLane) widgetWindow.setIgnoreMouseEvents(true, { forward: true });
-  else widgetWindow.setIgnoreMouseEvents(false);
+  if (overLane !== widgetPassesClicks) {
+    widgetWindow.setIgnoreMouseEvents(overLane);
+    widgetPassesClicks = overLane;
+  }
+}
+
+function startWidgetPointerTracking() {
+  if (process.platform !== 'win32' && process.platform !== 'darwin') return;
+  syncWidgetMouseRegion();
+  // Native drag regions swallow DOM enter/leave events. Sample the OS cursor
+  // only while visible and change the native hit test only on a lane crossing.
+  lanePointerTimer ??= setInterval(syncWidgetMouseRegion, 24);
 }
 
 function refitWidget() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
   widgetWindow.setBounds(fitWidgetBounds(widgetCardPosition()));
-  syncWidgetMouseRegion();
+  if (widgetWindow.isVisible()) syncWidgetMouseRegion();
 }
 
 function saveWidgetPosition() {
@@ -247,7 +266,8 @@ async function createWidget() {
       hideWidget();
     }
   });
-  widgetWindow.on('closed', () => { widgetWindow = undefined; });
+  widgetWindow.on('hide', stopWidgetPointerTracking);
+  widgetWindow.on('closed', () => { widgetWindow = undefined; stopWidgetPointerTracking(); });
   const createdWindow = widgetWindow;
   try {
     await loadWindow(createdWindow, true);
@@ -281,6 +301,7 @@ async function showWidget(minimizeMain = true, mode = 'manual') {
     }
     refitWidget();
     widgetWindow.showInactive();
+    startWidgetPointerTracking();
     if (minimizeMain && mainWindow && !mainWindow.isMinimized()) mainWindow.minimize();
   } catch (error) {
     if (request !== widgetRequest || quitting) return;
@@ -421,10 +442,6 @@ function createTray() {
 }
 
 function installIPC() {
-  ipcMain.on('niuma:widget-pointer-crossed', event => {
-    if (widgetWindow?.isVisible() && event.sender.id === widgetWindow.webContents.id
-      && isTrustedIpc(event, ownedContents, isAllowedURL)) syncWidgetMouseRegion();
-  });
   const handle = (channel, callback) => ipcMain.handle(channel, (event, ...args) => {
     validateSender(event);
     return callback(...args);
@@ -471,6 +488,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true;
     clearTimeout(positionTimer);
+    stopWidgetPointerTracking();
     clearInterval(scheduleTimer);
     widgetRequest++;
     saveWidgetPosition();

@@ -109,6 +109,7 @@ class BrowserWindow extends EventEmitter {
     this.options = options;
     this.visible = false;
     this.minimized = false;
+    this.mouseIgnored = false;
     this.destroyed = false;
     this.id = windows.length + 1;
     this.bounds = { x: 0, y: 0, ...options };
@@ -179,6 +180,7 @@ class BrowserWindow extends EventEmitter {
 
   hide() {
     this.visible = false;
+    this.emit('hide');
   }
 
   isVisible() {
@@ -314,8 +316,8 @@ try {
   await api.showWidget();
   assert.equal(windows.length, 2);
   const widgetApi = windows[1].bridge;
-  const pointerChannel = 'niuma:widget-pointer-crossed';
-  if (ipcMain.listenerCount(pointerChannel)) {
+  const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+  if (!['1.0.0', '1.0.1'].includes(releaseVersion)) {
     const widget = windows[1];
     const bounds = widget.getBounds();
     assert.deepEqual(bounds, {
@@ -325,18 +327,13 @@ try {
     screen.emit('display-metrics-changed');
     assert.deepEqual(widget.getBounds(), bounds);
     if (process.platform === 'win32' || process.platform === 'darwin') {
-      const laneEvent = { isTrusted: true, target: { classList: { contains: value => value === 'widget-pet-lane' } } };
       cursor = { x: bounds.x + 40, y: bounds.y + widgetLayout.laneHeight - 1 };
-      ipcMain.emit(pointerChannel, { sender: windows[0].webContents, senderFrame: frameFor(windows[0]) });
-      ipcMain.emit(pointerChannel, { sender: widget.webContents, senderFrame: frameFor(widget, true) });
-      assert.equal(widget.mouseIgnored, false);
-      widget.documentEvents.emit('mouseenter', laneEvent);
+      await new Promise(resolve => setTimeout(resolve, 70));
       assert.equal(widget.mouseIgnored, true);
-      assert.equal(widget.mouseForwarded, true);
       cursor.y++;
-      widget.documentEvents.emit('mouseleave', laneEvent);
+      await new Promise(resolve => setTimeout(resolve, 70));
       assert.equal(widget.mouseIgnored, false);
-      pass('packaged widget forwards pet-lane mouse movement, restores card hit testing and ignores unauthorized callers');
+      pass('packaged widget passes pet-lane clicks through and restores card hit testing without DOM mouse events');
     }
     pass('floating window preserves the legacy card position across display changes');
   }
