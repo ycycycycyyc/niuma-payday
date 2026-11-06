@@ -231,6 +231,9 @@ function stopWidgetPointerTracking() {
 
 function hitsWidgetPet(x, y) {
   if (!widgetPet?.width || !widgetPet.height) return false;
+  const menu = widgetPet.menu;
+  if (menu && x >= menu.left - 5 && x <= menu.left + menu.width + 5
+    && y >= menu.top - 5 && y <= menu.top + menu.height + 5) return true;
   const u = (x - widgetPet.left) / widgetPet.width;
   const v = (y - widgetPet.top) / widgetPet.height;
   // Match the dog button's 40% corner radius so its transparent corners stay click-through.
@@ -256,7 +259,7 @@ function syncWidgetMouseRegion() {
     widgetWindow.setIgnoreMouseEvents(passClicks);
     widgetPassesClicks = passClicks;
   }
-  if (!roaming && widgetPet?.chasing && (localX !== lastPetPointer?.x || localY !== lastPetPointer?.y)) {
+  if (!roaming && (widgetPet?.chasing || widgetPet?.menu) && (localX !== lastPetPointer?.x || localY !== lastPetPointer?.y)) {
     lastPetPointer = { x: localX, y: localY };
     widgetWindow.webContents.send('niuma:widget-pointer', lastPetPointer);
   }
@@ -635,8 +638,15 @@ function installIPC() {
       || width > widgetLayout.width || height > fullWidgetHeight) return;
     const chasing = state.chasing && widgetWindow.isVisible();
     const startedChasing = chasing && !widgetPet?.chasing;
+    const candidate = state.menu;
+    const menu = candidate && [candidate.left, candidate.top, candidate.width, candidate.height].every(Number.isFinite)
+      && candidate.left >= 0 && candidate.top >= 0 && candidate.width > 0 && candidate.width <= 120
+      && candidate.height > 0 && candidate.height <= 60
+      && candidate.left + candidate.width <= widgetLayout.width
+      && candidate.top + candidate.height <= fullWidgetHeight
+      ? { left: candidate.left, top: candidate.top, width: candidate.width, height: candidate.height } : null;
     widgetPet = { left, top, width, height, chasing, facing: state.facing === -1 ? -1 : 1,
-      launchPose: normalizePetLaunchPose(state.launchPose) };
+      launchPose: normalizePetLaunchPose(state.launchPose), menu };
     if (startedChasing) {
       lastPetPointer = null;
       syncWidgetMouseRegion();

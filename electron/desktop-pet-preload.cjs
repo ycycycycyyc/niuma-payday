@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Paint only. This renderer receives no salary data and exposes no desktop commands.
+// This renderer receives no salary data. Pet commands are checked by the owning surface.
 let latest;
 const listeners = new Set();
 let preparationPending = false;
@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('petOverlay', {
     ipcRenderer.send('niuma:desktop-pet-surface-ready');
   },
   firstFramePainted: () => ipcRenderer.send('niuma:desktop-pet-first-paint'),
+  feed: food => {
+    if (food === 'kibble' || food === 'stick') ipcRenderer.send('niuma:desktop-pet-feed', food);
+  },
   onFrame(listener) {
     listeners.add(listener);
     if (latest) listener(latest);

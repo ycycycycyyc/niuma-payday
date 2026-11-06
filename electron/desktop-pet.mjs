@@ -3,6 +3,8 @@ import { BrowserWindow, screen } from 'electron';
 import { petLaneHeight } from '../shared/widget-geometry.mjs';
 import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
 
+import { createPetFeeding, stepPetFeeding, petFeedingMenuRect } from '../shared/pet-feeding.mjs';
+
 const BONE_SIZE = 28;
 const FIRST_PAINT_TIMEOUT = 5000;
 const COLD_SURFACE_MS = 250;
@@ -16,10 +18,12 @@ function hideSurface(surface) {
   surface.win.hide();
   surface.shown = false;
   surface.lastFrame = '';
+  if (surface.acceptsMouse) surface.win.setIgnoreMouseEvents(true);
+  surface.acceptsMouse = false;
 }
 
-// A display-sized paint surface stays still while the dog runs. All input goes
-// through it, including at the dog's feet and at the bone under the cursor.
+// The paint surface stays still. Only the dog and an open food menu accept
+// input; every other part of the desktop remains click-through.
 function createSurface(area, root, developmentURL) {
   const createdAt = performance.now();
   const win = new BrowserWindow({
@@ -87,6 +91,77 @@ export class DesktopPet {
       }
     }
     if (trip) this.publish({ phase: 'docked', ...landing });
+  }
+
+  holdsFeedingSurface(event, surface) {
+    if (!['chasing', 'companion'].includes(this.state.phase) || !this.trip?.ready ||
+        !surface.shown || surface.win.isDestroyed()) return false;
+    const frame = surface.win.webContents.mainFrame;
+    return event.processId === frame.processId && event.frameId === frame.routingId;
+  }
+
+  menuGeometry(size = this.trip?.size) {
+    const pet = this.trip?.pet;
+    if (!pet || !size) return null;
+    const display = screen.getDisplayNearestPoint({ x: Math.round(pet.x), y: Math.round(pet.y) });
+    return { displayId: display.id, ...petFeedingMenuRect({
+      x: pet.x - size / 2, y: pet.y - size / 2, width: size, height: size,
+    }, display.workArea) };
+  }
+
+  hitsFoodMenu(cursor, padding = 0) {
+    const rect = this.menuGeometry();
+    return Boolean(rect && this.trip?.menuOpen && cursor.x >= rect.x - padding &&
+      cursor.x < rect.x + rect.width + padding && cursor.y >= rect.y - padding &&
+      cursor.y < rect.y + rect.height + padding);
+  }
+
+  tickFeeding(cursor, now) {
+    const trip = this.trip;
+    if (!['chasing', 'companion'].includes(this.state.phase)) {
+      trip.feeding = null;
+      trip.menuOpen = false;
+      return false;
+    }
+    if (trip.feeding) {
+      trip.feeding = stepPetFeeding(trip.feeding, now - trip.feedingAt);
+      trip.feedingAt = now;
+      trip.menuOpen = false;
+      if (trip.feeding) return true;
+      // Finishing a meal must not reopen its menu until the pointer leaves her.
+      trip.suppressFoodMenu = true;
+    }
+    const hitDog = this.hitsCompanion(cursor);
+    const hitMenu = this.hitsFoodMenu(cursor, 5);
+    if (!hitDog && !hitMenu) trip.suppressFoodMenu = false;
+    if (!trip.suppressFoodMenu && (hitDog || hitMenu)) {
+      trip.menuOpen = true;
+      trip.menuUntil = now + 280;
+    } else if (now >= (trip.menuUntil ?? 0)) trip.menuOpen = false;
+    return Boolean(trip.menuOpen);
+  }
+
+  syncPetMouseRegion(cursor) {
+    const canInteract = ['chasing', 'companion'].includes(this.state.phase);
+    const hit = canInteract && (this.hitsCompanion(cursor) || this.hitsFoodMenu(cursor, 5));
+    for (const surface of this.surfaces.values()) {
+      if (surface.win.isDestroyed()) continue;
+      const b = surface.win.getBounds();
+      const accepts = Boolean(surface.shown && hit && cursor.x >= b.x && cursor.x < b.x + b.width &&
+        cursor.y >= b.y && cursor.y < b.y + b.height);
+      if (accepts !== Boolean(surface.acceptsMouse)) {
+        surface.win.setIgnoreMouseEvents(!accepts);
+        surface.acceptsMouse = accepts;
+      }
+    }
+  }
+
+  hitsCompanion(cursor) {
+    const trip = this.trip;
+    if (!trip?.pet || !trip.size) return false;
+    const u = (cursor.x - trip.pet.x) / trip.size;
+    const v = (cursor.y - trip.pet.y) / trip.size;
+    return u * u + v * v <= .46 * .46;
   }
 
   prewarm() {
@@ -250,6 +325,17 @@ export class DesktopPet {
     contents.ipc.on('niuma:desktop-pet-first-paint', event => {
       if (fromLaunchSurface(event)) this.trip.confirmFirstFrame?.();
     });
+    contents.ipc.on('niuma:desktop-pet-feed', (event, food) => {
+      if (!this.holdsFeedingSurface(event, surface) || this.trip.feeding || !this.trip.menuOpen ||
+          this.menuGeometry()?.displayId !== display.id) return;
+      const feeding = createPetFeeding(food);
+      if (!feeding) return;
+      this.trip.feeding = feeding;
+      this.trip.feedingAt = performance.now();
+      this.trip.menuOpen = false;
+      this.trip.idleCursor = null;
+      this.tick(screen.getCursorScreenPoint());
+    });
     contents.on('render-process-gone', (_event, details) => failed(new Error(details.reason)));
     surface.win.on('closed', () => failed(new Error('桌面绘制窗口已关闭')));
     return surface;
@@ -275,7 +361,19 @@ export class DesktopPet {
   tick(cursor) {
     const trip = this.trip;
     if (!trip?.ready) return;
-    if (trip.idleCursor?.x === cursor.x && trip.idleCursor.y === cursor.y) return;
+    const now = performance.now();
+    if (this.tickFeeding(cursor, now)) {
+      trip.lastTime = now;
+      trip.idleCursor = null;
+      trip.pet = { ...trip.pet, vx: 0, vy: 0 };
+      this.paint(trip.pet, trip.size, null);
+      this.syncPetMouseRegion(cursor);
+      return;
+    }
+    if (trip.idleCursor?.x === cursor.x && trip.idleCursor.y === cursor.y) {
+      this.syncPetMouseRegion(cursor);
+      return;
+    }
     // Time spent standing beside the bone cannot count towards her first new stride.
     if (trip.idleCursor) trip.lastTime = performance.now();
     trip.idleCursor = null;
@@ -299,6 +397,7 @@ export class DesktopPet {
       trip.pet = { ...pet, x: position.x, y: position.y };
       if (returning && pet.arrived) { this.end({ dockX: home.cssX, facing: pet.facing }); return; }
       this.paint(trip.pet, home.size, bone);
+      this.syncPetMouseRegion(cursor);
       if (!returning && pet.arrived) trip.idleCursor = cursor;
     } catch (error) {
       console.warn('Unable to animate the desktop pet:', error.message);
@@ -307,6 +406,7 @@ export class DesktopPet {
   }
 
   paint(pet, size, bone, handoffSurface = null) {
+    if (this.trip) this.trip.size = size;
     const left = pet.x - size / 2, top = pet.y - size / 2;
     const sampleTime = performance.now();
     for (const display of this.displays) {
@@ -324,8 +424,11 @@ export class DesktopPet {
       const bounds = win.getContentBounds();
       const frame = {
         dog: dogHere ? { x: left - bounds.x, y: top - bounds.y, size, facing: pet.facing, pose: pet.pose, frame: pet.frame,
-          vx: pet.vx, vy: pet.vy } : null,
+          vx: pet.vx, vy: pet.vy, feedable: ['chasing', 'companion'].includes(this.state.phase),
+          reducedMotion: Boolean(this.trip?.reduced) } : null,
         bone: boneHere ? { x: bone.x - bounds.x, y: bone.y - bounds.y } : null,
+        feeding: dogHere ? this.trip?.feeding ?? null : null,
+        menuOpen: Boolean(dogHere && this.trip?.menuOpen && this.menuGeometry(size)?.displayId === display.id),
         ...(surface === handoffSurface ? { handoff: true } : {}),
       };
       const key = JSON.stringify(frame);

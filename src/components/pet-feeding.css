@@ -1,0 +1,46 @@
+.pet-food-menu {
+  box-sizing: border-box;
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 104px;
+  height: 52px;
+  padding: 4px;
+  border: 1px solid #d5adbb;
+  border-radius: 18px;
+  background: #fff5f1f5;
+  box-shadow: 0 3px 8px #593c5226, inset 0 1px 0 #fff;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+.pet-food-option {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 42px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  touch-action: manipulation;
+}
+.pet-food-option:hover { background: #f9dfd8; border-color: #e8c5bd; }
+.pet-food-option:focus-visible { outline: 2px solid #92476f; outline-offset: -2px; }
+.pet-food-option:active .pet-food-picture { transform: scale(.92); }
+.pet-food-picture { width: 42px; height: 42px; background: no-repeat 0 center / 200% 100%; pointer-events: none; }
+.pet-feeding-sprite {
+  display: block;
+  position: absolute;
+  z-index: 2;
+  background: no-repeat 0 0 / 400% 400%;
+  pointer-events: none;
+}
+.pet-food-menu[hidden], .pet-feeding-sprite[hidden] { display: none; }

@@ -24,3 +24,6 @@ html, body {
   filter: drop-shadow(0 1px 1px #674c394f);
 }
 #desktop-dog[hidden], #desktop-bone[hidden] { display: none; }
+
+#desktop-dog[data-feedable="true"] { pointer-events: auto; cursor: pointer; }
+#desktop-dog[data-feeding="true"] { background-image: none; }

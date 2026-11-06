@@ -128,3 +128,51 @@ test('the first desktop pose is drawn before handoff and movement continues betw
   await page.clock.runFor(1000);
   expect(await x()).toBeCloseTo(64);
 });
+
+test('desktop food options are images and both food choices reach only the pet bridge', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame(listener) {
+        window.addEventListener('pet-frame', event => listener((event as CustomEvent).detail));
+        return () => {};
+      },
+      firstFramePainted() {}, onPrepare() {}, surfaceReady() {},
+      feed(food) { document.body.dataset.foodChoice = food; },
+    };
+  });
+  await page.goto('/pet.html');
+  const frame = (food: 'kibble' | 'stick' | null, elapsedMs = 0) => page.evaluate(({ food, elapsedMs }) => {
+    window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+      sampleTime: performance.now(),
+      dog: { x: 1110, y: 8, size: 76, facing: -1, frame: 0, pose: 'stand', vx: 0, vy: 0, feedable: true },
+      bone: null, menuOpen: food === null, feeding: food ? { food, elapsedMs } : null,
+    } }));
+  }, { food, elapsedMs });
+  const menu = page.locator('.pet-food-menu');
+  await frame(null);
+  await expect(menu).toBeVisible();
+  expect((await menu.textContent())?.trim()).toBe('');
+  const menuBounds = await menu.boundingBox();
+  expect(menuBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(1240);
+  await page.getByRole('button', { name: '喂狗粮', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-food-choice', 'kibble');
+  await frame('kibble', 800);
+  await expect(menu).toBeHidden();
+  await expect(page.locator('#desktop-dog')).toHaveAttribute('data-feeding', 'true');
+  await expect(page.locator('#desktop-dog')).toHaveCSS('background-image', 'none');
+  const eating = page.locator('.pet-feeding-sprite');
+  await expect(eating).toBeVisible();
+  const firstFrame = await eating.evaluate(element => getComputedStyle(element).backgroundPosition);
+  await frame('kibble', 1100);
+  await expect.poll(() => eating.evaluate(element => getComputedStyle(element).backgroundPosition)).not.toBe(firstFrame);
+  await frame(null);
+  await expect(eating).toBeHidden();
+  await page.getByRole('button', { name: '喂棒棒', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-food-choice', 'stick');
+  await frame('stick', 1000);
+  await expect(eating).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: { dog: null, bone: null } })));
+  await expect(menu).toBeHidden();
+  await expect(eating).toBeHidden();
+});

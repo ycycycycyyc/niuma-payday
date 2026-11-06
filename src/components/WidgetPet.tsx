@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Bone } from 'lucide-react';
 import { createPetMotion, requestPetHandshake, stepPetMotion } from '../lib/pet-motion';
+import { createPetFeeding, stepPetFeeding, type PetFeeding, type PetFood } from '../../shared/pet-feeding.mjs';
+import { createPetFeedingView } from '../lib/pet-feeding-view';
 import type { DesktopPetState } from '../lib/store';
 import actions from '../assets/widget-dog-actions.webp';
 import walk from '../assets/widget-dog-walk.webp';
@@ -52,6 +54,84 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
     let reportedFacing = 0;
     let reportedPose = '';
     let reportedFrame = -1;
+    let reportedMenu = '';
+    let menuOpen = false;
+    let feeding: PetFeeding | null = null;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    let hovered = false;
+    let suppressMenu = false;
+    const foodView = createPetFeedingView(lane, {
+      onFeed: feed,
+      onMenuEnter: enterMenu,
+      onMenuLeave: leaveMenu,
+    });
+
+    function closeMenu() {
+      clearTimeout(closeTimer);
+      menuOpen = false;
+      dog.setAttribute('aria-expanded', 'false');
+      wake();
+    }
+    function openMenu() {
+      clearTimeout(closeTimer);
+      if (feeding || suppressMenu || motion.current.handshakeMs !== null) return;
+      menuOpen = true;
+      // Stop at the current footprint instead of advancing while a click is aimed.
+      motion.current = { ...motion.current, speed: 0, turn: null, pose: 'stand', frame: 0 };
+      dog.setAttribute('aria-expanded', 'true');
+      wake();
+    }
+    function enterMenu() { hovered = true; clearTimeout(closeTimer); }
+    function leaveMenu() {
+      hovered = false;
+      clearTimeout(closeTimer);
+      closeTimer = setTimeout(() => {
+        if (!hovered && !lane.querySelector(':focus-visible')) closeMenu();
+      }, 240);
+    }
+    function enterDog() {
+      hovered = true;
+      if (!feeding) suppressMenu = false;
+      openMenu();
+    }
+    function leaveDog() { suppressMenu = false; leaveMenu(); }
+    function feed(food: PetFood) {
+      if (feeding) return;
+      feeding = createPetFeeding(food);
+      if (!feeding) return;
+      suppressMenu = true;
+      closeMenu();
+      motion.current = { ...motion.current, speed: 0, turn: null, handshakeMs: null };
+      if (foodView.menu.contains(document.activeElement)) dog.focus({ preventScroll: true });
+      lastTime = null;
+      wake();
+    }
+    function keydown(event: KeyboardEvent) {
+      if (event.key === 'Escape' && menuOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        suppressMenu = true;
+        closeMenu();
+        dog.focus({ preventScroll: true });
+      } else if (event.key === 'ArrowDown' && event.target === dog && !feeding) {
+        event.preventDefault();
+        suppressMenu = false;
+        openMenu();
+        // Paint immediately so the previously hidden button can receive focus.
+        renderFood();
+        foodView.menu.querySelector('button')?.focus();
+      }
+    }
+    function renderFood() {
+      const pet = motion.current;
+      foodView.render({
+        anchor: { x: inset + pet.x, y: dog.offsetTop, width: dog.offsetWidth, height: dog.offsetHeight },
+        bounds: { x: 0, y: 0, width: lane.clientWidth, height: lane.clientHeight },
+        facing: pet.facing, feeding, open: menuOpen, reducedMotion: quiet.matches,
+      });
+      dog.dataset.feeding = String(Boolean(feeding));
+      dog.setAttribute('aria-busy', String(Boolean(feeding)));
+    }
 
     function wake() {
       if (!raf && !document.hidden) raf = requestAnimationFrame(draw);
@@ -61,23 +141,30 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
       const pet = motion.current;
       const x = Math.round(pet.x);
       const samePose = pet.facing === reportedFacing && pet.pose === reportedPose && frame === reportedFrame;
-      if (samePose && (x === reportedX || (!settling && time - lastReport < 32))) return;
+      const menu = menuOpen && !feeding ? foodView.menu.getBoundingClientRect() : null;
+      const menuKey = menu ? `${menu.x},${menu.y},${menu.width},${menu.height}` : '';
+      if (samePose && menuKey === reportedMenu && (x === reportedX || (!settling && time - lastReport < 32))) return;
       const rect = dog.getBoundingClientRect();
       bridge.setWidgetPet({
         left: rect.left, top: rect.top, width: rect.width, height: rect.height, chasing, facing: pet.facing,
         launchPose: { pose: pet.pose, frame, stepPhase: pet.stepPhase, speed: pet.speed },
+        menu: menu && { left: menu.left, top: menu.top, width: menu.width, height: menu.height },
       });
       reportedX = x;
       reportedFacing = pet.facing;
       reportedPose = pet.pose;
       reportedFrame = frame;
+      reportedMenu = menuKey;
       lastReport = time;
     }
     function draw(time: number) {
       raf = 0;
       if (document.hidden) return;
       const targetX = pointer && chasing ? pointer.x - lane.getBoundingClientRect().left - inset - halfDog : null;
-      const pet = stepPetMotion(motion.current, lastTime === null ? 0 : time - lastTime, {
+      const delta = lastTime === null ? 0 : time - lastTime;
+      const wasFeeding = Boolean(feeding);
+      if (feeding) feeding = stepPetFeeding(feeding, delta);
+      const pet = wasFeeding || menuOpen ? motion.current : stepPetMotion(motion.current, delta, {
         trackLength, chasing, targetX, reducedMotion: quiet.matches,
       });
       motion.current = pet;
@@ -100,9 +187,10 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
         dog.dataset.facing = String(pet.facing);
         sprite.style.transform = `scaleX(${pet.facing})`;
       }
-      const moving = !quiet.matches && trackLength >= 4 && !(chasing && pet.pose === 'wag');
+      renderFood();
+      const moving = !menuOpen && !quiet.matches && trackLength >= 4 && !(chasing && pet.pose === 'wag');
       syncHitArea(time, !moving, frame);
-      if (pet.handshakeMs !== null || moving) {
+      if (feeding || pet.handshakeMs !== null || moving) {
         lastTime = time;
         wake();
       } else {
@@ -119,6 +207,14 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
     }
     function movePointer(point: Point) {
       pointer = point;
+      if (menuOpen && bridge) {
+        const bounds = dog.getBoundingClientRect();
+        const menu = foodView.menu.getBoundingClientRect();
+        const inside = [bounds, menu].some(rect => point.x >= rect.left - 5 && point.x <= rect.right + 5
+          && point.y >= rect.top - 5 && point.y <= rect.bottom + 5);
+        if (inside) enterMenu();
+        else leaveMenu();
+      }
       if (bone) {
         const visible = point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight;
         bone.hidden = !visible;
@@ -137,20 +233,33 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
       raf = 0;
       lastTime = null;
       if (document.hidden) {
+        feeding = null;
+        closeMenu();
         if (chasing) setChasing(false);
         motion.current = createPetMotion(motion.current.x);
       } else measure();
     }
-    handshake.current = () => { motion.current = requestPetHandshake(motion.current); wake(); };
+    handshake.current = () => {
+      if (feeding) return;
+      suppressMenu = true;
+      closeMenu();
+      motion.current = requestPetHandshake(motion.current);
+      wake();
+    };
+    dog.addEventListener('pointerenter', enterDog);
+    dog.addEventListener('pointerleave', leaveDog);
+    dog.addEventListener('focus', openMenu);
+    dog.addEventListener('blur', leaveMenu);
+    lane.addEventListener('keydown', keydown);
     const resize = new ResizeObserver(measure);
     resize.observe(lane);
     document.addEventListener('visibilitychange', visibility);
     quiet.addEventListener('change', measure);
     let unsubscribe: (() => void) | undefined;
+    if (bridge) unsubscribe = bridge.onWidgetPointer(movePointer);
     if (chasing) {
       // Native drag regions swallow DOM pointer moves; the widget supplies its local coordinates.
-      if (bridge) unsubscribe = bridge.onWidgetPointer(movePointer);
-      else {
+      if (!bridge) {
         window.addEventListener('pointermove', onPointer, true);
         window.addEventListener('pointerout', onPointerOut, true);
       }
@@ -167,6 +276,15 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
     cancelAnimationFrame(raf);
     draw(performance.now());
     return () => {
+      clearTimeout(closeTimer);
+      foodView.destroy();
+      dog.dataset.feeding = 'false';
+      dog.setAttribute('aria-expanded', 'false');
+      dog.removeEventListener('pointerenter', enterDog);
+      dog.removeEventListener('pointerleave', leaveDog);
+      dog.removeEventListener('focus', openMenu);
+      dog.removeEventListener('blur', leaveMenu);
+      lane.removeEventListener('keydown', keydown);
       cancelAnimationFrame(raf);
       resize.disconnect();
       quiet.removeEventListener('change', measure);
@@ -180,7 +298,7 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
 
   return <>
     <div className="widget-pet-lane" ref={laneRef} data-pet-phase={phase}>
-      <button type="button" className="widget-dog" ref={dogRef} hidden={phase !== 'docked'} aria-label="和狗狗握手" title="和狗狗握手"
+      <button type="button" className="widget-dog" ref={dogRef} hidden={phase !== 'docked'} aria-label="和狗狗握手" aria-expanded="false"
         onPointerDown={e => {
           if (!e.isPrimary || e.button !== 0) return;
           e.preventDefault();

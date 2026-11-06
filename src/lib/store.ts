@@ -29,6 +29,7 @@ declare global {
       setWidgetPet?(state: {
         left: number; top: number; width: number; height: number;
         chasing: boolean; facing?: 1 | -1; launchPose?: PetLaunchPose;
+        menu?: { left: number; top: number; width: number; height: number } | null;
       }): void;
       onWidgetPointer?(callback: (point: { x: number; y: number }) => void): () => void;
       minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void>;

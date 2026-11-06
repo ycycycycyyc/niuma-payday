@@ -48,6 +48,7 @@
   background: 0 center / 400% 100% no-repeat;
   pointer-events: none;
 }
+.widget-dog[data-feeding="true"] .pet-sprite { visibility: hidden; }
 .widget .widget-bone-toggle[aria-pressed="true"] {
   color: #632d3c;
   border-color: #9e5f64;

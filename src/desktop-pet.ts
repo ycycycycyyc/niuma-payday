@@ -1,11 +1,13 @@
 import actions from './assets/widget-dog-actions.webp';
 import walk from './assets/widget-dog-walk.webp';
 import type { PetPose } from './lib/pet-motion';
+import type { PetFeeding as PetFeedingState, PetFood } from '../shared/pet-feeding.mjs';
+import { createPetFeedingView } from './lib/pet-feeding-view';
 import './desktop-pet.css';
 
 type Point = { x: number; y: number };
-type Dog = Point & { size: number; facing: -1 | 1; frame: number; pose: PetPose; vx: number; vy: number };
-type Frame = { dog: Dog | null; bone: Point | null; sampleTime: number; handoff?: boolean };
+type Dog = Point & { size: number; facing: -1 | 1; frame: number; pose: PetPose; vx: number; vy: number; feedable?: boolean; reducedMotion?: boolean };
+type Frame = { dog: Dog | null; bone: Point | null; sampleTime: number; handoff?: boolean; feeding?: PetFeedingState | null; menuOpen?: boolean };
 type Sample = { dog: Dog; time: number };
 
 declare global {
@@ -15,12 +17,23 @@ declare global {
       firstFramePainted(): void;
       onPrepare(listener: () => void): void;
       surfaceReady(): void;
+      feed?(food: PetFood): void;
     };
   }
 }
 
 const sprite = document.getElementById('desktop-dog')!;
 const cursorBone = document.getElementById('desktop-bone')!;
+let currentFeeding: PetFeedingState | null = null;
+let foodMenuOpen = false;
+const foodView = createPetFeedingView(document.body, {
+  onFeed(food) {
+    if (foodMenuOpen && !currentFeeding && sprite.dataset.feedable === 'true') window.petOverlay?.feed?.(food);
+  },
+  onMenuEnter() {},
+  onMenuLeave() {},
+});
+window.addEventListener('pagehide', () => foodView.destroy(), { once: true });
 const artworkReady = Promise.all([walk, actions].map(src => {
   const image = new Image();
   image.src = src;
@@ -64,7 +77,14 @@ function paint(dog: Dog, x: number, y: number) {
   if (sprite.style.width !== size) sprite.style.width = sprite.style.height = size;
   sprite.dataset.facing = String(dog.facing);
   sprite.style.transform = `translate3d(${x}px, ${y}px, 0) scaleX(${dog.facing})`;
+  sprite.dataset.feeding = String(Boolean(currentFeeding));
   sprite.hidden = false;
+  foodView.render({
+    anchor: { x, y, width: dog.size, height: dog.size },
+    bounds: { x: 0, y: 0, width: innerWidth, height: innerHeight },
+    facing: dog.facing, feeding: currentFeeding, open: foodMenuOpen,
+    reducedMotion: Boolean(dog.reducedMotion) || matchMedia('(prefers-reduced-motion: reduce)').matches,
+  });
 }
 
 function draw(time: number) {
@@ -92,15 +112,25 @@ function clearPath() {
   samples = [];
 }
 
-window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff }) => {
+window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen }) => {
+  currentFeeding = feeding ?? null;
+  foodMenuOpen = Boolean(dog && menuOpen && !currentFeeding);
   cursorBone.hidden = bone === null;
   if (bone) cursorBone.style.transform = `translate3d(${bone.x}px, ${bone.y}px, 0)`;
   if (!dog) {
     handoffSerial++;
     clearPath();
     sprite.hidden = true;
+    sprite.dataset.feedable = 'false';
+    sprite.dataset.feeding = 'false';
+    foodView.render({
+      anchor: { x: 0, y: 0, width: 0, height: 0 },
+      bounds: { x: 0, y: 0, width: innerWidth, height: innerHeight },
+      facing: 1, feeding: null, open: false, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+    });
     return;
   }
+  sprite.dataset.feedable = String(Boolean(dog.feedable));
   if (handoff) {
     clearPath();
     const serial = ++handoffSerial;
@@ -115,7 +145,7 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff }) => {
     });
     return;
   }
-  if (dog.pose !== 'walk') {
+  if (dog.pose !== 'walk' || currentFeeding || foodMenuOpen) {
     clearPath();
     paint(dog, dog.x, dog.y);
     return;
