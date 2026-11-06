@@ -60,6 +60,19 @@ function App() {
   const calendarJobs = useRef(new Set<string>());
   const [dayBusy, setDayBusy] = useState(false);
   const drag = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
+  const browserWidgetHost = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = browserWidgetHost.current;
+    if (!browserWidget || !host) return;
+    const fit = () => {
+      const { width, height } = host.getBoundingClientRect();
+      setWidgetPosition(previous => ({ x: Math.max(0, Math.min(previous.x, window.innerWidth - width)), y: Math.max(0, Math.min(previous.y, window.innerHeight - height)) }));
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(host);
+    window.addEventListener('resize', fit);
+    return () => { observer.disconnect(); window.removeEventListener('resize', fit); };
+  }, [browserWidget]);
   const demo = !state.configured;
   const settings = demo ? DEFAULT_SETTINGS : state.settings;
   const now = useClock(demo);
@@ -164,7 +177,7 @@ function App() {
 
   if (!loaded) return <div className="loading-state"><Flower2 size={28} /><span>正在唤醒你的工资…</span></div>;
   if (profileError) return <div className="connection-error" role="alert"><p>{profileError}</p><button className="button secondary" onClick={() => window.location.reload()}>重新连接</button></div>;
-  if (isWidget) return <Widget state={state} onTogglePrivacy={togglePrivacy} onRestore={() => void action(() => window.niuma!.restoreMain())} onHide={() => void action(() => window.niuma!.hideWidget())} />;
+  if (isWidget) return <Widget state={state} onRestore={() => void action(() => window.niuma!.restoreMain())} onHide={() => void action(() => window.niuma!.hideWidget())} />;
 
   const restCard = <section className={`rest-card ${breakStart !== null ? 'is-resting' : ''}`}>
     <div className="card-top"><span className="section-label"><Coffee size={18} />带薪充电站</span></div>
@@ -253,10 +266,10 @@ function App() {
     {settingsOpen && <SettingsModal settings={state.settings} calendar={state.calendar} onSave={saveSettings} onClose={() => setSettingsOpen(false)} />}
     {goalOpen && <GoalModal goal={state.goal} onSave={async goal => { await save({ ...state, goal }); setGoalOpen(false); setToast('新的小目标，安排好了。'); }} onClose={() => setGoalOpen(false)} />}
     {notice && <div className="toast" role={notice.error ? 'alert' : 'status'}>{notice.error ? <span aria-hidden="true">!</span> : <Check size={17} />}<span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="关闭提示"><X size={14} /></button></div>}
-    {browserWidget && <div className="browser-widget-host"
+    {browserWidget && <div className="browser-widget-host" ref={browserWidgetHost}
       style={{ ...widgetLayoutStyle, '--widget-right': `${widgetPosition.x}px`, '--widget-bottom': `${widgetPosition.y}px` } as CSSProperties}
       onPointerDown={e => {
-        if (e.button !== 0 || (e.target as Element).closest('button')) return;
+        if (e.button !== 0 || (e.target as Element).closest('button, input, [role="dialog"]')) return;
         const bounds = e.currentTarget.getBoundingClientRect();
         drag.current = { clientX: e.clientX, clientY: e.clientY, x: window.innerWidth - bounds.right, y: window.innerHeight - bounds.bottom };
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -270,7 +283,7 @@ function App() {
         });
       }}
       onLostPointerCapture={() => { drag.current = null; }}>
-      <Widget state={state} onTogglePrivacy={togglePrivacy} preview onRestore={() => setBrowserWidget(false)} onHide={() => setBrowserWidget(false)} />
+      <Widget state={state} preview onRestore={() => setBrowserWidget(false)} onHide={() => setBrowserWidget(false)} />
     </div>}
   </div>;
 }

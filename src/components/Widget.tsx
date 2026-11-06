@@ -1,13 +1,14 @@
-import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, Eye, EyeOff, GripHorizontal, X } from 'lucide-react';
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, GripHorizontal, Settings, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import layout from '../../shared/widget-layout.json';
 import lensMap from '../assets/widget-lens-displacement.png?inline';
 import { DEFAULT_SETTINGS, calculateSalary } from '../lib/salary';
 import { duration, useClock } from '../lib/clock';
 import type { AppState, DesktopPetState, WidgetLayer } from '../lib/store';
 import LiveAmount from './LiveAmount';
-import Mascot from './Mascot';
 import WidgetPet from './WidgetPet';
+import WidgetSettings from './WidgetSettings';
+import { useWidgetAppearance } from '../lib/widget-appearance';
 import './widget.css';
 
 // The transparent pet lane is part of the same frameless native window.
@@ -95,16 +96,35 @@ function LensFilter({ id }: { id: string }) {
   </svg>;
 }
 
-export default function Widget({ state, onTogglePrivacy, onRestore, onHide, preview = false }: { state: AppState; onTogglePrivacy: () => Promise<void>; onRestore: () => void; onHide: () => void; preview?: boolean }) {
+export default function Widget({ state, onRestore, onHide, preview = false, backdrop }: { state: AppState; onRestore: () => void; onHide: () => void; preview?: boolean; backdrop?: ReactNode }) {
   const boneButton = useRef<HTMLButtonElement>(null);
+  const settingsButton = useRef<HTMLButtonElement>(null);
+  const shell = useRef<HTMLDivElement>(null);
   const desktop = preview ? undefined : window.niuma;
   const bone = useBoneMode(desktop);
-  const [privacySave, setPrivacySave] = useState<'idle' | 'saving' | 'failed'>('idle');
-  const privacyLabel = state.privacy ? '显示金额' : '隐藏金额';
+  const { appearance, update, status: appearanceStatus, retry } = useWidgetAppearance(preview);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [space, setSpace] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [layer, setLayer] = useState<WidgetLayer | null>(null);
   const [changingLayer, setChangingLayer] = useState(false);
   const [layerError, setLayerError] = useState(false);
   const layerRevision = useRef(0);
+
+  useLayoutEffect(() => {
+    if (desktop) return;
+    const area = shell.current?.closest('.preview-field');
+    const fit = () => setSpace({ width: area?.clientWidth ?? window.innerWidth, height: area?.clientHeight ?? window.innerHeight });
+    fit();
+    const observer = new ResizeObserver(fit);
+    if (area) observer.observe(area);
+    window.addEventListener('resize', fit);
+    return () => { observer.disconnect(); window.removeEventListener('resize', fit); };
+  }, [desktop]);
+
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    requestAnimationFrame(() => settingsButton.current?.focus());
+  };
 
   useEffect(() => {
     if (!desktop?.getWidgetLayer) return;
@@ -121,16 +141,6 @@ export default function Widget({ state, onTogglePrivacy, onRestore, onHide, prev
     });
     return () => { layerRevision.current++; unsubscribe?.(); };
   }, [desktop]);
-
-  async function changePrivacy() {
-    setPrivacySave('saving');
-    try {
-      await onTogglePrivacy();
-      setPrivacySave('idle');
-    } catch {
-      setPrivacySave('failed');
-    }
-  }
 
   async function changeLayer() {
     if (!desktop?.setWidgetLayer || !desktop.getWidgetLayer || changingLayer) return;
@@ -160,13 +170,24 @@ export default function Widget({ state, onTogglePrivacy, onRestore, onHide, prev
   const timeLabel = onShift ? '距离下班' : '工作时段';
   const timeValue = onShift ? duration(result.remainingSeconds) : `${settings.startTime}–${settings.endTime}`;
   const lensId = `widget-lens-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-  const lensStyle = { '--widget-lens-filter': `url("#${lensId}") saturate(1.06)` } as CSSProperties;
+  const lensStyle = {
+    '--widget-lens-filter': `url("#${lensId}") saturate(1.06)`,
+    '--glass-pink': appearance.tint,
+    '--glass-opacity': `${appearance.opacity * 100}%`,
+  } as CSSProperties;
+  const scale = desktop ? 1 : Math.min(appearance.scale, space.width / layout.width, space.height / (layout.cardHeight + layout.laneHeight));
+  const channels = [1, 3, 5].map(start => parseInt(appearance.tint.slice(start, start + 2), 16) / 255);
+  const lightness = channels.reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+  const ink = appearance.opacity >= .55 ? (lightness < .55 ? 'light' : 'dark') : undefined;
 
-  return <div className="widget-stack" style={widgetLayoutStyle}>
+  return <div className="widget-shell" ref={shell} style={{ width: desktop ? `min(${layout.width}px, 100vw)` : layout.width * scale, height: desktop ? `min(${layout.cardHeight + layout.laneHeight}px, 100dvh)` : (layout.cardHeight + layout.laneHeight) * scale }}>
+    <div className="widget-stack" style={{ ...widgetLayoutStyle, zoom: scale }}>
     <WidgetPet chasing={!bone.native && bone.chasing} setChasing={bone.change}
       desktopState={bone.state} boneButton={boneButton} preview={preview} />
+    {backdrop}
     {hasLensFilter && <LensFilter id={lensId} />}
-    <section className={`widget ${preview ? 'widget-preview' : ''}`} data-refraction={hasLensFilter ? 'svg' : 'fallback'} style={lensStyle} aria-label="工资悬浮窗">
+    <section className={`widget ${preview ? 'widget-preview' : ''} ${settingsOpen ? 'widget-editing' : ''}`} data-refraction={hasLensFilter ? 'svg' : 'fallback'} data-glass-ink={ink} style={lensStyle} aria-label="工资悬浮窗">
+      {settingsOpen ? <WidgetSettings value={appearance} onChange={update} onClose={closeSettings} status={appearanceStatus} onRetry={retry} /> : <>
       <div className="widget-head">
         <div className="widget-head-move">
           {bone.error || layerError ? <span className="widget-status" role="status">{bone.error ? '骨头操作失败，可重试' : '层级操作失败，可重试'}</span> :
@@ -174,10 +195,7 @@ export default function Widget({ state, onTogglePrivacy, onRestore, onHide, prev
           <GripHorizontal size={18} className="widget-grip" aria-hidden="true" />
         </div>
         <div className="widget-actions">
-          <button type="button" aria-label={privacyLabel} title={privacyLabel}
-            disabled={privacySave === 'saving'} onClick={changePrivacy}>
-            {state.privacy ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
-          </button>
+          <button ref={settingsButton} type="button" aria-label="浮窗设置" title="浮窗设置" onClick={() => setSettingsOpen(true)}><Settings size={17} aria-hidden="true" /></button>
           <button ref={boneButton} type="button" className="widget-bone-toggle" aria-pressed={bone.chasing}
             aria-label={bone.chasing ? '收起骨头' : '拿起骨头'} title={bone.chasing ? '收起骨头（Esc）' : '拿起骨头，让她追着玩'}
             onClick={() => bone.change(!bone.chasing)}><Bone size={17} aria-hidden="true" /></button>
@@ -191,11 +209,12 @@ export default function Widget({ state, onTogglePrivacy, onRestore, onHide, prev
         </div>
       </div>
       <div className="widget-middle">
-        <div className="widget-earnings"><span className="widget-earnings-label" role={privacySave === 'failed' ? 'alert' : undefined}>{privacySave === 'failed' ? '金额设置未保存，请重试' : '今日已赚'}</span><LiveAmount settings={settings} demo={demo} privacy={state.privacy} calendar={calendar} compact /></div>
-        <div className="widget-mascot" aria-hidden="true"><Mascot /></div>
+        <div className="widget-earnings"><span className="widget-earnings-label">今日已赚</span><LiveAmount settings={settings} demo={demo} privacy={state.privacy} calendar={calendar} compact /></div>
       </div>
       <div className="widget-foot"><span className="widget-time-label"><Clock3 size={19} aria-hidden="true" />{timeLabel}</span><span className={`widget-time-value ${onShift ? '' : 'schedule'}`}>{timeValue}</span></div>
       <div className="widget-progress"><i style={{ width: `${result.progress * 100}%` }} /></div>
+      </>}
     </section>
+    </div>
   </div>;
 }

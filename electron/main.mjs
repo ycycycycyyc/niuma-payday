@@ -6,7 +6,8 @@ import { fetchCalendarYear, isValidDateKey, normalizeCalendarCache } from '../sh
 import { createWidgetSession, decideWidget, dismissWidget, getActiveShift, markManualWidget } from '../shared/scheduler.mjs';
 import { createEntryPolicy, isTrustedIpc } from '../shared/ipc-origin.mjs';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
-import { fullWidgetHeight, petLaneHeight, widgetBoundsInWorkArea } from '../shared/widget-geometry.mjs';
+import { fullWidgetHeight, petLaneHeight, widgetBoundsInWorkArea, widgetScaleInWorkArea } from '../shared/widget-geometry.mjs';
+import { normalizeWidgetAppearance, validateWidgetAppearance } from '../shared/widget-appearance.mjs';
 import { setWindowsWidgetLayer } from './windows-widget-layer.mjs';
 import { DesktopPet } from './desktop-pet.mjs';
 import { normalizePetLaunchPose } from '../shared/desktop-pet-motion.mjs';
@@ -140,6 +141,7 @@ function loadWindow(window, widget = false) {
   secureWindow(window, widget ? 'widget' : 'main');
   window.webContents.on('did-finish-load', () => {
     window.webContents.send('niuma:widget-layer-changed', getWidgetLayer());
+    window.webContents.send('niuma:widget-appearance-changed', getWidgetAppearance());
   });
   if (developmentURL) {
     return window.loadURL(`${developmentURL.replace(/\/$/, '')}/${widget ? '#/widget' : ''}`);
@@ -196,22 +198,25 @@ function createMainWindow() {
   });
 }
 
-function fitWidgetBounds(saved) {
-  if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) {
-    return widgetBoundsInWorkArea(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea);
-  }
-  const anchor = { x: Math.round(saved.x), y: Math.round(saved.y) };
+function fitWidgetPresentation(saved, appearance = getWidgetAppearance()) {
+  const anchor = saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)
+    ? { x: Math.round(saved.x), y: Math.round(saved.y) } : undefined;
   // At a monitor boundary choose the display covering most of the window.
-  const display = screen.getDisplayMatching({
-    x: anchor.x, y: anchor.y - widgetLayout.laneHeight, width: widgetLayout.width, height: fullWidgetHeight,
-  });
-  return widgetBoundsInWorkArea(display.workArea, anchor);
+  const display = anchor ? screen.getDisplayMatching({
+    x: anchor.x, y: Math.round(anchor.y - widgetLayout.laneHeight * appearance.scale),
+    width: Math.ceil(widgetLayout.width * appearance.scale), height: Math.ceil(fullWidgetHeight * appearance.scale),
+  }) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  return {
+    bounds: widgetBoundsInWorkArea(display.workArea, anchor, appearance.scale),
+    scale: widgetScaleInWorkArea(display.workArea, appearance.scale),
+  };
 }
 
 // Persist the card's top-left corner, the same anchor used before the pet was added.
 function widgetCardPosition() {
   const { x, y, height } = widgetWindow.getBounds();
-  return { x, y: y + petLaneHeight(height) };
+  const scale = widgetWindow.webContents.getZoomFactor();
+  return { x, y: y + petLaneHeight(height / scale) * scale };
 }
 
 function stopWidgetPointerTracking() {
@@ -268,8 +273,58 @@ function startWidgetPointerTracking() {
 
 function refitWidget() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
-  widgetWindow.setBounds(fitWidgetBounds(widgetCardPosition()));
+  applyWidgetAppearance(getWidgetAppearance(), widgetCardPosition());
   if (widgetWindow.isVisible()) syncWidgetMouseRegion();
+}
+
+function getWidgetAppearance() {
+  return normalizeWidgetAppearance(desktopState.widgetAppearance);
+}
+
+function applyWidgetAppearance(appearance, anchor) {
+  if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  const presentation = fitWidgetPresentation(anchor, appearance);
+  // Main and widget share an origin. Only this WebContents may change scale.
+  widgetWindow.webContents.setZoomMode('isolated');
+  widgetWindow.webContents.setZoomFactor(presentation.scale);
+  widgetWindow.setBounds(presentation.bounds);
+}
+
+function setWidgetAppearance(value) {
+  if (!validateWidgetAppearance(value)) throw new Error('[SETTINGS_INVALID] 浮窗外观设置无效。');
+  const next = normalizeWidgetAppearance(value);
+  const window = widgetWindow && !widgetWindow.isDestroyed() ? widgetWindow : null;
+  const previousBounds = window?.getBounds();
+  const previousScale = window?.webContents.getZoomFactor();
+  const anchor = window ? widgetCardPosition() : desktopState.widgetPosition;
+  try {
+    applyWidgetAppearance(next, anchor);
+    const nextDesktopState = { ...desktopState, widgetAppearance: next,
+      ...(window ? { widgetPosition: widgetCardPosition() } : {}) };
+    writeJSON(desktopPath(), nextDesktopState);
+    desktopState = nextDesktopState;
+  } catch (error) {
+    // No acknowledgement or broadcast is allowed until the atomic write succeeds.
+    if (window && !window.isDestroyed()) {
+      try {
+        window.webContents.setZoomFactor(previousScale);
+        window.setBounds(previousBounds);
+        if (window.isVisible()) syncWidgetMouseRegion();
+      } catch (restoreError) { console.warn('Unable to restore widget appearance:', restoreError.message); }
+    }
+    if (error.code === 'ENOSPC') throw new Error('[SAVE_SPACE] 磁盘空间不足，浮窗设置未保存。');
+    if (['EPERM', 'EACCES', 'EBUSY', 'EROFS', 'EISDIR'].includes(error.code)) {
+      throw new Error('[SAVE_PERMISSION] 无法写入本机应用数据目录，浮窗设置未保存。');
+    }
+    throw new Error('[SAVE_FAILED] 浮窗设置未保存，请重试。');
+  }
+  if (window?.isVisible()) syncWidgetMouseRegion();
+  for (const target of [mainWindow, widgetWindow]) {
+    if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) {
+      target.webContents.send('niuma:widget-appearance-changed', next);
+    }
+  }
+  return next;
 }
 
 function saveWidgetPosition() {
@@ -318,8 +373,9 @@ function bringWidgetToTop() {
 }
 
 async function createWidget() {
+  const presentation = fitWidgetPresentation(desktopState.widgetPosition);
   widgetWindow = new BrowserWindow({
-    ...fitWidgetBounds(desktopState.widgetPosition),
+    ...presentation.bounds,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -339,6 +395,8 @@ async function createWidget() {
     icon: appIcon,
     webPreferences: { ...webPreferences, backgroundThrottling: true },
   });
+  widgetWindow.webContents.setZoomMode('isolated');
+  widgetWindow.webContents.setZoomFactor(presentation.scale);
   try {
     applyWidgetLayer(getWidgetLayer());
   } catch (error) {
@@ -367,6 +425,7 @@ async function createWidget() {
   const createdWindow = widgetWindow;
   try {
     await loadWindow(createdWindow, true);
+    applyWidgetAppearance(getWidgetAppearance(), desktopState.widgetPosition);
     return createdWindow;
   } catch (error) {
     // A failed first load must not leave a blank window cached forever.
@@ -607,6 +666,8 @@ function installIPC() {
   });
   handle('niuma:get-widget-layer', getWidgetLayer);
   handle('niuma:set-widget-layer', setWidgetLayer);
+  handle('niuma:get-widget-appearance', getWidgetAppearance);
+  handle('niuma:set-widget-appearance', setWidgetAppearance);
   handle('niuma:set-state', (value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Settings must be an object.');
     const serialized = JSON.stringify(value);

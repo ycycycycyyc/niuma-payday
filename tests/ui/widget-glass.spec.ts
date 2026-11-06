@@ -36,7 +36,6 @@ async function widgetMetrics(page: Page) {
       return { x, y, width, height };
     }
     const card = stack.querySelector('.widget')!;
-    const cow = card.querySelector('.widget-mascot .mascot')!;
     const time = card.querySelector('.widget-time-value')!;
     const amount = card.querySelector('.live-amount')!;
     const text = document.createRange();
@@ -44,7 +43,6 @@ async function widgetMetrics(page: Page) {
     const amountText = text.getBoundingClientRect();
     return {
       card: bounds(card),
-      cow: bounds(cow),
       time: bounds(time),
       timeFont: parseFloat(getComputedStyle(time).fontSize),
       amountLeft: amountText.left,
@@ -124,8 +122,8 @@ test('same widget layout on Windows and Mac profiles, with transparent glass and
       await openWidget(page);
       const metrics = await widgetMetrics(page);
       expect(metrics.card).toMatchObject({ x: 0, y: 72, width: 376, height: 200 });
-      expect(metrics.cow.width).toBeGreaterThanOrEqual(70);
-      expect(metrics.cow.height).toBeGreaterThanOrEqual(70);
+      await expect(page.locator('.widget-mascot')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '和狗狗握手', exact: true })).toBeVisible();
       expect(metrics.timeFont).toBeGreaterThanOrEqual(23);
       const opacity = await glassOpacity(page);
       expect(opacity.fractionTranslucent).toBeGreaterThan(0.4);
@@ -143,7 +141,7 @@ test('same widget layout on Windows and Mac profiles, with transparent glass and
   fs.writeFileSync(path.join(output, 'profiles.json'), JSON.stringify(results, null, 2));
 });
 
-test('maximum supported HKD salary, mascot, countdown and controls stay inside narrow widget', async ({ page }) => {
+test('maximum supported HKD salary, countdown and controls stay inside narrow widget without the cow', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 320, height: 272 });
   await openWidget(page, 1_000_000_000, 'HKD');
@@ -154,11 +152,10 @@ test('maximum supported HKD salary, mascot, countdown and controls stay inside n
     const metrics = await widgetMetrics(page);
     expect(metrics.card.width).toBe(width);
     expect(metrics.amountLeft).toBeGreaterThanOrEqual(metrics.card.x);
-    expect(metrics.amountRight).toBeLessThanOrEqual(metrics.cow.x);
-    expect(metrics.cow.x + metrics.cow.width).toBeLessThanOrEqual(width);
+    expect(metrics.amountRight).toBeLessThanOrEqual(metrics.card.x + metrics.card.width - 10);
     expect(metrics.time.x + metrics.time.width).toBeLessThanOrEqual(width);
     expect(metrics.amountBottom).toBeLessThanOrEqual(metrics.time.y);
-    for (const name of ['返回主窗口', '隐藏浮窗']) {
+    for (const name of ['浮窗设置', '返回主窗口', '隐藏浮窗']) {
       const button = page.getByRole('button', { name, exact: true });
       await expect(button).toBeVisible();
       const bounds = (await button.boundingBox())!;
@@ -205,13 +202,10 @@ test('dashboard and floating glass paint coordinated pinks and keep salary and c
     expect(Math.abs(onBlack[channel] - blush[channel] * (1 - transmission))).toBeLessThanOrEqual(1.5);
   }
 
-  // A token change must repaint both surfaces. This catches copies of the same hard-coded hex.
+  // Widget appearance is independent of the dashboard palette so a saved tint remains stable.
   await page.evaluate(() => document.documentElement.style.setProperty('--dialogue-pink', '#0080ff'));
   expect(await paintSample(hero, .58, .44)).toEqual([0, 128, 255]);
-  const blueGlass = await paintSample(card, .60, .44);
-  expect(blueGlass[0]).toBeLessThanOrEqual(20);
-  expect(blueGlass[1]).toBeGreaterThan(10);
-  expect(blueGlass[2]).toBeGreaterThan(blueGlass[1] + 8);
+  expect(await paintSample(card, .60, .44)).toEqual(onBlack);
   fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, 'pink-surfaces.json'), JSON.stringify({ sample, onWhite, onBlack, mainInk }, null, 2));
 });

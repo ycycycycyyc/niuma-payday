@@ -111,14 +111,18 @@ function WallpaperLens({ position }: { position: Position | null }) {
     const align = () => {
       const bounds = wall.getBoundingClientRect();
       const card = aperture.getBoundingClientRect();
-      texture.setAttribute('x', String(bounds.left - card.left));
-      texture.setAttribute('y', String(bounds.top - card.top));
-      texture.setAttribute('width', String(bounds.width));
-      texture.setAttribute('height', String(bounds.height));
+      const scale = card.width / aperture.clientWidth || 1;
+      texture.setAttribute('x', String((bounds.left - card.left) / scale));
+      texture.setAttribute('y', String((bounds.top - card.top) / scale));
+      texture.setAttribute('width', String(bounds.width / scale));
+      texture.setAttribute('height', String(bounds.height / scale));
     };
     align();
+    const observer = new ResizeObserver(align);
+    observer.observe(aperture);
+    observer.observe(wall);
     window.addEventListener('resize', align);
-    return () => window.removeEventListener('resize', align);
+    return () => { observer.disconnect(); window.removeEventListener('resize', align); };
   }, [position]);
   return <svg ref={lens} className="preview-wallpaper-lens" aria-hidden="true" focusable="false">
     <defs><filter id="preview-wallpaper-bevel" filterUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
@@ -158,14 +162,13 @@ function Preview() {
   }, [clamp]);
   useLayoutEffect(() => {
     if (surface === 'widget') setPosition(previous => previous && clamp(previous));
+    if (!frame.current) return;
+    const observer = new ResizeObserver(() => setPosition(previous => previous && clamp(previous)));
+    observer.observe(frame.current);
+    return () => observer.disconnect();
   }, [clamp, surface]);
   const sendPrivacyToDashboard = (privacy: boolean) => {
     dashboardFrame.current?.contentWindow?.postMessage({ channel: 'niuma-preview', action: 'privacy', privacy }, '*');
-  };
-  const togglePrivacy = async () => {
-    const privacy = !profile.privacy;
-    setProfile(previous => ({ ...previous, privacy }));
-    sendPrivacyToDashboard(privacy);
   };
   useEffect(() => {
     const receive = (event: MessageEvent) => {
@@ -179,7 +182,7 @@ function Preview() {
   }, [profile.privacy]);
 
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !event.isPrimary || !(event.target instanceof Element) || event.target.closest('button')) return;
+    if (event.button !== 0 || !event.isPrimary || !(event.target instanceof Element) || event.target.closest('button, input, [role="dialog"]')) return;
     const rect = event.currentTarget.getBoundingClientRect();
     drag.current = { id: event.pointerId, dx: event.clientX - rect.left, dy: event.clientY - rect.top };
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -212,8 +215,7 @@ function Preview() {
     <div className="preview-field" ref={field}>
       {surface === 'widget' && <div className="preview-frame" ref={frame} style={{ ...widgetLayoutStyle, ...(position && { left: position.x, top: position.y, transform: 'none' }) }}
         onPointerDown={startDrag} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}>
-        <WallpaperLens position={position} />
-        <Widget state={profile} preview onTogglePrivacy={togglePrivacy} onRestore={openDashboard} onHide={() => setSurface('hidden')} />
+        <Widget state={profile} preview backdrop={<WallpaperLens position={position} />} onRestore={openDashboard} onHide={() => setSurface('hidden')} />
       </div>}
       {dashboard && <iframe ref={dashboardFrame} title="主界面演示" className="preview-dashboard"
         hidden={surface !== 'dashboard'} srcDoc={dashboard.html}

@@ -12,13 +12,15 @@ html:has(body.widget-body), body.widget-body { background: transparent; }
 body.widget-body { min-width: 0; overflow: hidden; }
 .widget-body #root { width: 100vw; height: 100dvh; overflow: hidden; }
 .widget-stack, .browser-widget-host { width: var(--widget-width); max-width: 100%; }
-.widget-stack { user-select: none; }
+.widget-shell { max-width: 100%; }
+.widget-stack { position: relative; user-select: none; }
 .widget-lens-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .browser-widget-host {
   position: fixed;
   z-index: 50;
-  right: clamp(0px, var(--widget-right), 100vw - var(--widget-width));
-  bottom: clamp(0px, var(--widget-bottom), 100dvh - var(--lane-height) - var(--card-height));
+  right: max(0px, var(--widget-right));
+  bottom: max(0px, var(--widget-bottom));
+  width: max-content;
   max-width: 100vw;
   pointer-events: none;
   touch-action: none;
@@ -52,7 +54,7 @@ body.widget-body { min-width: 0; overflow: hidden; }
   border-radius: 26px;
   color: var(--glass-ink);
   /* A fuller blush tint softens the backdrop while preserving the curved glass refraction. */
-  background-color: color-mix(in srgb, var(--glass-pink) 36%, transparent);
+  background-color: color-mix(in srgb, var(--glass-pink) var(--glass-opacity, 36%), transparent);
   background-image:
     radial-gradient(ellipse at 97% 0%, rgb(255 174 212 / 30%), transparent 32%),
     radial-gradient(ellipse at 0% 103%, rgb(242 156 200 / 28%), transparent 37%);
@@ -107,13 +109,13 @@ body.widget-body { min-width: 0; overflow: hidden; }
   background: var(--glass-button);
   box-shadow: inset 0 1px 1px #fff9fc99; -webkit-app-region: no-drag;
 }
-.widget-actions button:hover { color: #58273f; border-color: #aa7290; background-color: var(--glass-pink); }
+.widget-actions button:hover { color: var(--glass-ink); border-color: currentColor; background-color: var(--glass-pink); }
 .widget-actions button:focus-visible { outline: 2px solid #92476f; outline-offset: 2px; }
 @media (max-width: 335px) {
   .widget-body .widget-grip { display: none; }
   .widget-body .widget-actions { gap: 4px; }
 }
-.widget-middle { display: grid; grid-template-columns: minmax(0, 1fr) 85px; align-items: center; gap: 5px; min-width: 0; }
+.widget-middle { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; min-width: 0; }
 .widget-earnings { min-width: 0; container-type: inline-size; }
 .widget-earnings-label { color: var(--glass-muted); font-size: 13px; font-weight: 600; }
 .widget .live-amount {
@@ -126,9 +128,6 @@ body.widget-body { min-width: 0; overflow: hidden; }
 .widget .live-amount .amount-integer { font-size: 1em; font-weight: 600; letter-spacing: -.05em; }
 .widget .live-amount .amount-decimal { font-size: .68em; color: var(--glass-secondary); letter-spacing: -.045em; }
 .widget .live-amount .currency { font-size: .46em; color: var(--glass-secondary); margin-right: .21em; letter-spacing: -.035em; }
-.widget-mascot { position: relative; display: grid; place-items: center; width: 85px; height: 85px; }
-.widget-mascot::before { content: ''; position: absolute; z-index: -1; inset: 9px 3px 0; border-radius: 50%; background: radial-gradient(ellipse at 45% 35%, #fff0fa40, #eda7c522 62%, transparent 74%); }
-.widget .widget-mascot > .mascot { width: 92px; max-width: none; height: 92px; margin: -4px; filter: drop-shadow(0 1px 0 #ffffffb5); }
 .widget-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; border-top: 1px solid var(--glass-rule); }
 .widget-time-label { display: inline-flex; align-items: center; gap: 7px; color: var(--glass-ink); font-size: 17px; font-weight: 600; white-space: nowrap; }
 .widget-time-label svg { color: var(--glass-secondary); }
@@ -136,7 +135,7 @@ body.widget-body { min-width: 0; overflow: hidden; }
 .widget .widget-time-value.schedule { font-size: 25px; }
 .widget-progress { display: flex; height: 4px; border-radius: 3px; background: var(--glass-rule); overflow: hidden; }
 .widget-progress > i { display: block; height: 100%; max-width: 100%; border-radius: inherit; background: var(--glass-progress); }
-[data-glass-scene="dark"] .widget {
+[data-glass-scene="dark"] .widget:not([data-glass-ink="dark"]), .widget[data-glass-ink="light"] {
   --glass-ink: #fff5fb;
   --glass-secondary: #ffe5f3;
   --glass-muted: #fffcfe;
@@ -146,6 +145,26 @@ body.widget-body { min-width: 0; overflow: hidden; }
   --glass-button-edge: rgb(255 223 242 / 54%);
   --glass-progress: #ffc0e2;
 }
+.widget.widget-editing { display: block; }
+.widget-settings { display: grid; grid-template-rows: 29px 1fr 24px; gap: 8px; height: 100%; color: var(--glass-ink); -webkit-app-region: no-drag; }
+.widget-settings-head { display: flex; align-items: center; justify-content: space-between; }
+.widget-settings-head strong { font-size: 14px; font-weight: 650; }
+.widget-settings button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--glass-button-edge); border-radius: 8px; background: var(--glass-button); color: var(--glass-ink); font-size: 11px; line-height: 18px; }
+.widget-settings button:hover { transform: none; border-color: currentColor; }
+.widget-settings :is(button, input):focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.widget-settings-fields { display: grid; align-content: space-evenly; gap: 5px; }
+.widget-setting-row { display: flex; align-items: center; gap: 10px; min-height: 27px; font-size: 12px; }
+.widget-setting-row > span:first-child { flex: 0 0 61px; font-weight: 600; }
+.widget-setting-row input[type="range"] { flex: 1; min-width: 0; height: 20px; margin: 0; accent-color: #9b5174; cursor: pointer; }
+.widget-setting-row output { width: 36px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; }
+.widget-swatches { display: flex; flex: 1; gap: 9px; }
+.widget-swatches button { width: 22px; height: 22px; padding: 0; border: 1px solid #8e6d7b70; border-radius: 50%; }
+.widget-swatches button[aria-pressed="true"] { outline: 2px solid var(--glass-ink); outline-offset: 2px; }
+.widget-setting-row input[type="color"] { width: 36px; height: 25px; padding: 2px; border: 1px solid var(--glass-button-edge); border-radius: 7px; background: var(--glass-button); cursor: pointer; }
+.widget-settings-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; border-top: 1px solid var(--glass-rule); padding-top: 5px; }
+.widget-settings-foot > span { font-size: 10px; }
+.widget-save-error { display: flex; align-items: center; gap: 4px; }
+.widget-save-error button { padding: 0 4px; font-size: 10px; line-height: 17px; }
 /* The real desktop pixel colour is private. Give ink a local light outline that travels with the text. */
 .widget-body :is(.widget-status, .widget-earnings-label, .widget .live-amount, .widget-foot) {
   -webkit-text-stroke: 1.1px var(--glass-halo);
