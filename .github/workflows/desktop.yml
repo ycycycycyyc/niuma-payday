@@ -2,6 +2,12 @@ name: Desktop builds
 
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to build
+        type: choice
+        options: [mac, all]
+        default: mac
   push:
     tags: ['v*']
   pull_request:
@@ -22,45 +28,96 @@ permissions:
 
 jobs:
   build:
+    name: Build ${{ matrix.target }} (${{ matrix.arch }})
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            target: win
-            arch: x64
-            executable: release/win-unpacked/牛马鼓励器.exe
-          - os: macos-15
-            target: mac
+        target: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platforms == 'mac' && '["mac"]' || '["mac","win"]') }}
+        arch: [arm64, x64]
+        exclude:
+          - target: win
             arch: arm64
-            executable: release/mac-arm64/牛马鼓励器.app/Contents/MacOS/牛马鼓励器
-          - os: macos-15-intel
-            target: mac
-            arch: x64
-            executable: release/mac/牛马鼓励器.app/Contents/MacOS/牛马鼓励器
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.target == 'win' && 'windows-latest' || matrix.arch == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Build desktop package
-        run: npx electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never
+      - name: Build native macOS packages
+        if: matrix.target == 'mac'
+        run: npx --no-install electron-builder --mac dmg zip --${{ matrix.arch }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # Pull requests use the same ad-hoc identity with no signing credentials.
+          CSC_FOR_PULL_REQUEST: 'true'
+      - name: Build Windows packages
+        if: matrix.target == 'win'
+        run: npx --no-install electron-builder --win nsis portable --x64 --publish never
+      - name: Verify macOS disk image and ZIP
+        id: mac
+        if: matrix.target == 'mac'
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          arch="$TARGET_ARCH"
+          if [[ "$arch" == x64 ]]; then arch=x86_64; fi
+          [[ "$(uname -m)" == "$arch" ]]
+          version=$(node -p "require('./package.json').version")
+          base="release/Niuma-$version-mac-$TARGET_ARCH"
+          work=$(mktemp -d "$RUNNER_TEMP/mac-check.XXXXXX")
+          mkdir "$work/zip" "$work/dmg"
+          ditto -x -k "$base.zip" "$work/zip"
+          hdiutil verify "$base.dmg"
+          hdiutil attach -readonly -nobrowse -mountpoint "$work/dmg" "$base.dmg"
+          trap 'hdiutil detach "$work/dmg"' EXIT
+          [[ "$(readlink "$work/dmg/Applications")" == /Applications ]]
+
+          app_name='牛马鼓励器'
+          zip_app="$work/zip/$app_name.app"
+          dmg_app="$work/dmg/$app_name.app"
+          for app in "$zip_app" "$dmg_app"; do
+            contents="$app/Contents"
+            binary="$contents/MacOS/$app_name"
+            framework="$contents/Frameworks/Electron Framework.framework"
+            [[ -x "$binary" && -L "$framework/Versions/Current" && -x "$framework/Electron Framework" ]]
+            [[ "$(lipo -archs "$binary")" == "$arch" && "$(lipo -archs "$framework/Electron Framework")" == "$arch" ]]
+            codesign --verify --deep --strict --verbose=2 "$app"
+            details=$(codesign -dv --verbose=4 "$app" 2>&1)
+            grep -q '^Signature=adhoc$' <<< "$details"
+          done
+
+          cmp "$zip_app/Contents/_CodeSignature/CodeResources" "$dmg_app/Contents/_CodeSignature/CodeResources"
+          cmp "$zip_app/Contents/Resources/app.asar" "$dmg_app/Contents/Resources/app.asar"
+          codesign -d --entitlements - "$zip_app" > "$work/entitlements.plist"
+          for entitlement in allow-jit disable-library-validation; do
+            [[ "$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.cs.$entitlement" "$work/entitlements.plist")" == true ]]
+          done
+          info="$zip_app/Contents/Info.plist"
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" == studio.niuma.payday ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$version" ]]
+          key=':ElectronAsarIntegrity:Resources/app.asar'
+          [[ "$(/usr/libexec/PlistBuddy -c "Print $key:algorithm" "$info")" == SHA256 ]]
+          digest=$(node -e 'const header = require("@electron/asar").getRawHeader(process.argv[1]).headerString; console.log(require("node:crypto").createHash("sha256").update(header).digest("hex"));' "$zip_app/Contents/Resources/app.asar")
+          [[ "$(/usr/libexec/PlistBuddy -c "Print $key:hash" "$info")" == "$digest" ]]
+          echo "executable=$zip_app/Contents/MacOS/$app_name" >> "$GITHUB_OUTPUT"
       - name: Verify packaged native windows and settings
         run: node scripts/smoke-desktop.mjs
         timeout-minutes: 5
         env:
-          NIUMA_SMOKE_EXECUTABLE: ${{ matrix.executable }}
+          NIUMA_SMOKE_EXECUTABLE: ${{ steps.mac.outputs.executable || 'release/win-unpacked/牛马鼓励器.exe' }}
           NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-smoke
       - name: Save native window evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: Niuma-smoke-${{ matrix.target }}-${{ matrix.arch }}
           path: |
@@ -69,9 +126,10 @@ jobs:
             artifacts/native-widget.png
             artifacts/native-error.png
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: Niuma-${{ matrix.target }}-${{ matrix.arch }}
+          compression-level: 0
           path: |
             release/*.exe
             release/*.dmg
