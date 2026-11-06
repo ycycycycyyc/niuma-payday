@@ -59,7 +59,8 @@ export async function verifyMacWidget(desktop, widget, scratch, record) {
     const dog = button('和狗狗握手');
     await macClick(desktop, dog);
     await expect(dog).toHaveAttribute('data-pose', 'paw');
-    assert.equal(await dog.evaluate(el => getComputedStyle(el).outlineStyle), 'none');
+    const focus = await dog.evaluate(el => ({ outline: getComputedStyle(el).outlineStyle, keyboard: el.matches(':focus-visible') }));
+    assert.deepEqual(focus, { outline: 'none', keyboard: false });
     record('WindowServer click reaches the app behind transparent padding and the moving dog shakes paws without a pointer outline');
 
     await macClick(desktop, button('拿起骨头'));
@@ -115,7 +116,8 @@ export async function verifyMacWidget(desktop, widget, scratch, record) {
     y: win.y + (dragArea.y + dragArea.height / 2) * win.scale });
   await expect.poll(async () => {
     const moved = await nativeWidget(desktop);
-    return Math.abs(moved.x - (win.x - 40)) <= 3 && Math.abs(moved.y - (win.y - 32)) <= 3;
+    // AppKit starts a window move once the native drag threshold has been crossed.
+    return Math.abs(moved.x - (win.x - 40)) <= 8 && Math.abs(moved.y - (win.y - 32)) <= 8;
   }).toBe(true);
   await pointer('move', previousPointer);
   record('Dragging the card body through WindowServer moves the native window to the pointer destination');

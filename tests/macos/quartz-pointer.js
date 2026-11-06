@@ -4,7 +4,7 @@ ObjC.import('CoreGraphics');
 ObjC.import('Foundation');
 
 function run(args) {
-  if (!$.CGPreflightPostEventAccess()) {
+  if (typeof $.CGPreflightPostEventAccess === 'function' && !$.CGPreflightPostEventAccess()) {
     throw new Error('WindowServer mouse testing requires PostEvent access for osascript');
   }
   const action = args[0];
