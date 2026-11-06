@@ -4,7 +4,7 @@
 
 ## 开始使用
 
-**Mac** 用户可以从苹果菜单打开「关于本机」。如果「芯片」显示 Apple M 系列，选择 `mac-arm64.dmg` 结尾的文件。如果「处理器」显示 Intel，选择 `mac-x64.dmg` 结尾的文件。打开 DMG，把「牛马鼓励器」拖进「应用程序」，然后从那里启动。更新前，先在菜单栏的小牛菜单中选择「退出」。[Mac 安装包（私有仓库）](https://github.com/ycycycycyyc/niuma-payday/releases/tag/macos-v1.1.1)
+**Mac** 用户可以从苹果菜单打开「关于本机」。如果「芯片」显示 Apple M 系列，选择 `mac-arm64.dmg` 结尾的文件。如果「处理器」显示 Intel，选择 `mac-x64.dmg` 结尾的文件。打开 DMG，把「牛马鼓励器」拖进「应用程序」，然后从那里启动。更新前，先在菜单栏的小牛菜单中选择「退出」。[Mac 安装包与使用教程](https://github.com/ycycycycyyc/niuma-payday/releases/tag/macos-v1.1.1)
 
 **Windows** 用户可双击 `Niuma-1.1.0-windows-x64-portable.exe`。如已运行旧版，请先从系统托盘的牛马鼓励器菜单选择「退出」。
 
@@ -88,7 +88,7 @@ npx electron-builder --mac dmg zip --arm64 --publish never
 npx electron-builder --mac dmg zip --x64 --publish never
 ```
 
-在私有仓库手动运行 `Desktop builds` 时，默认分别使用 Apple Silicon 和 Intel 的 macOS 构建机。每个任务校验 DMG 和 ZIP 的架构及签名，再从交付 ZIP 中启动应用做原生测试。当前 Mac 包使用供内部测试的本地签名（ad-hoc），尚未通过 Apple 公证。
+在 GitHub 手动运行 `Desktop builds` 时，默认分别使用 Apple Silicon 和 Intel 的 macOS 构建机。每个任务校验 DMG 和 ZIP 的架构及签名，再从交付 ZIP 中启动应用做原生测试。当前 Mac 包使用供内部测试的本地签名（ad-hoc），尚未通过 Apple 公证。
 
 ## 主要文件
 
