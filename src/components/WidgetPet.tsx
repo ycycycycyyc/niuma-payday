@@ -32,7 +32,9 @@ export default function WidgetPet({ chasing, setChasing, boneButton, preview }: 
     const dog = dogRef.current!;
     const sprite = spriteRef.current!;
     const bone = boneRef.current;
-    const bridge = !preview && window.niuma?.setWidgetPet ? window.niuma : undefined;
+    const api = preview ? undefined : window.niuma;
+    const bridge = api?.setWidgetPet && api.onWidgetPointer
+      ? { setWidgetPet: api.setWidgetPet, onWidgetPointer: api.onWidgetPointer } : undefined;
     const quiet = matchMedia('(prefers-reduced-motion: reduce)');
     let pointer: Point | null = null;
     let trackLength = 0;
