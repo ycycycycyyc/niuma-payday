@@ -27,6 +27,7 @@ async function openWidget(page: Page, monthlySalary = 15120, currency = 'CNY') {
   await page.clock.pauseAt(new Date('2026-11-06T06:36:12Z'));
   await page.goto('/#/widget');
   await expect(page.locator('.widget-time-value')).toHaveText('03:23:48');
+  await page.evaluate(async () => { await document.fonts.ready; });
 }
 
 async function widgetMetrics(page: Page) {
@@ -45,6 +46,9 @@ async function widgetMetrics(page: Page) {
       card: bounds(card),
       time: bounds(time),
       timeFont: parseFloat(getComputedStyle(time).fontSize),
+      amountFamily: getComputedStyle(amount).fontFamily,
+      timeFamily: getComputedStyle(time).fontFamily,
+      labelFamily: getComputedStyle(card.querySelector('.widget-earnings-label')!).fontFamily,
       amountLeft: amountText.left,
       amountRight: amountText.right,
       amountBottom: amountText.bottom,
@@ -120,7 +124,23 @@ test('same widget layout on Windows and Mac profiles, with transparent glass and
     try {
       const page = await context.newPage();
       await openWidget(page);
+      const fonts = await page.evaluate(async () => {
+        const sample = '今日已赚距离下班设置¥HK$0123456789:,.零';
+        const faces = await Promise.all(['400', '700'].map(async weight => ({
+          requestedWeight: weight,
+          loaded: (await document.fonts.load(`${weight} 16px "Niuma Rounded"`, sample))
+            .map(face => ({ family: face.family.replace(/["']/g, ''), weight: face.weight, status: face.status })),
+        })));
+        await document.fonts.ready;
+        return faces;
+      });
+      for (const face of fonts) {
+        expect(face.loaded).toContainEqual({ family: 'Niuma Rounded', weight: face.requestedWeight, status: 'loaded' });
+      }
       const metrics = await widgetMetrics(page);
+      for (const family of [metrics.amountFamily, metrics.timeFamily, metrics.labelFamily]) {
+        expect(family.split(',')[0].replace(/["']/g, '').trim()).toBe('Niuma Rounded');
+      }
       expect(metrics.card).toMatchObject({ x: 0, y: 72, width: 376, height: 200 });
       await expect(page.locator('.widget-mascot')).toHaveCount(0);
       await expect(page.getByRole('button', { name: '和狗狗握手', exact: true })).toBeVisible();
@@ -130,7 +150,7 @@ test('same widget layout on Windows and Mac profiles, with transparent glass and
       await page.screenshot({ path: path.join(output, `${profile.name}.png`), omitBackground: true });
       await page.clock.runFor(1000);
       await expect(page.locator('.widget-time-value')).toHaveText('03:23:47');
-      results.push({ profile: profile.name, metrics, opacity });
+      results.push({ profile: profile.name, metrics, opacity, fonts });
     } finally {
       await context.close();
     }
@@ -149,6 +169,8 @@ test('maximum supported HKD salary, countdown and controls stay inside narrow wi
   await expect(page.locator('.amount-integer')).toHaveText(/\d{2},\d{3},\d{3}/);
   for (const width of [320, 376]) {
     await page.setViewportSize({ width, height: 272 });
+    await page.clock.runFor(32);
+    await expect.poll(async () => (await widgetMetrics(page)).card.width).toBe(width);
     const metrics = await widgetMetrics(page);
     expect(metrics.card.width).toBe(width);
     expect(metrics.amountLeft).toBeGreaterThanOrEqual(metrics.card.x);

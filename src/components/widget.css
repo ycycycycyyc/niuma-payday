@@ -6,13 +6,28 @@
   font-weight: 400 700;
   font-display: swap;
 }
+/* Local WOFF2 editions of ChillRoundF; copyright and OFL travel with each font. */
+@font-face {
+  font-family: 'Niuma Rounded';
+  src: url('../assets/fonts/niuma-rounded-regular.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Niuma Rounded';
+  src: url('../assets/fonts/niuma-rounded-bold.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
 
 /* Both the native window and the in-page preview use the same glass and dimensions. */
 html:has(body.widget-body), body.widget-body { background: transparent; }
 body.widget-body { min-width: 0; overflow: hidden; }
 .widget-body #root { width: 100vw; height: 100dvh; overflow: hidden; }
 .widget-stack, .browser-widget-host { width: var(--widget-width); max-width: 100%; }
-.widget-shell { max-width: 100%; }
+.widget-shell { max-width: 100%; font-family: 'Niuma Rounded', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
 .widget-stack { position: relative; user-select: none; }
 .widget-lens-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .browser-widget-host {
@@ -120,7 +135,7 @@ body.widget-body { min-width: 0; overflow: hidden; }
 .widget .live-amount {
   margin: 0;
   color: var(--glass-ink);
-  font-family: 'Niuma Widget Digits', sans-serif;
+  font-family: 'Niuma Rounded', 'Niuma Widget Digits', sans-serif;
   font-size: min(54px, calc(99cqi / (var(--amount-chars, 4) * .64 + 2.25)));
   line-height: 1.1;
 }
@@ -130,7 +145,7 @@ body.widget-body { min-width: 0; overflow: hidden; }
 .widget-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; border-top: 1px solid var(--glass-rule); }
 .widget-time-label { display: inline-flex; align-items: center; gap: 7px; color: var(--glass-ink); font-size: 17px; font-weight: 600; white-space: nowrap; }
 .widget-time-label svg { color: var(--glass-secondary); }
-.widget .widget-time-value { color: var(--glass-ink); font: 600 31px/1.12 'Niuma Widget Digits', sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -.035em; white-space: nowrap; }
+.widget .widget-time-value { color: var(--glass-ink); font: 700 31px/1.12 'Niuma Rounded', 'Niuma Widget Digits', sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -.035em; white-space: nowrap; }
 .widget .widget-time-value.schedule { font-size: 25px; }
 .widget-progress { display: flex; height: 4px; border-radius: 3px; background: var(--glass-rule); overflow: hidden; }
 .widget-progress > i { display: block; height: 100%; max-width: 100%; border-radius: inherit; background: var(--glass-progress); }

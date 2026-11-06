@@ -1,0 +1,53 @@
+{
+  "family": "Niuma Rounded",
+  "upstream": "ChillRoundF v3.200 / ChillType",
+  "source": "https://github.com/Warren2060/ChillRound/releases/tag/v3.200",
+  "archive": "https://github.com/Warren2060/ChillRound/releases/download/v3.200/ChillRoundF_v3.200.zip",
+  "license": "SIL Open Font License 1.1",
+  "notice": "/licenses/OFL-Niuma-Rounded.txt",
+  "modifications": "Renamed family and PostScript names; converted TTF to WOFF2. No glyph subsetting or outline changes.",
+  "fonts": [
+    {
+      "file": "niuma-rounded-regular.woff2",
+      "weight": 400,
+      "bytes": 2614076,
+      "sourceSha256": "7ccfc2cd0e971edeac7f65516df8db379f0f84d0d8ff79ee4dfe377956418d3b",
+      "sha256": "9ea37612643ee15aeb3dc7299bbdd325b3c10b7be63359e5976a46beffe0d33b",
+      "glyphs": 15865,
+      "codepoints": 14304,
+      "digitAdvancesEm": [
+        0.613,
+        0.45,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613
+      ]
+    },
+    {
+      "file": "niuma-rounded-bold.woff2",
+      "weight": 700,
+      "bytes": 2890380,
+      "sourceSha256": "f2c4f9295d9d04a1eb6392ae3c51ecf2a9ffab355a45c6686eeec5eede3381ec",
+      "sha256": "0cd7c999bc28d5c84e3b8265c08890b550112bf0bcd5dccdcee779656a0a6ba1",
+      "glyphs": 15865,
+      "codepoints": 14304,
+      "digitAdvancesEm": [
+        0.613,
+        0.45,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613,
+        0.613
+      ]
+    }
+  ]
+}
