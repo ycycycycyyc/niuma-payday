@@ -9,11 +9,13 @@ import koffi from 'koffi';
 // restores the physical cursor, and clicks only a verified visible food button.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
-const userData = path.join(artifacts, `pet-feeding-test-${Date.now()}`);
+const userData = path.join(process.env.NIUMA_SMOKE_DATA_ROOT || artifacts, `pet-feeding-test-${Date.now()}`);
+const executablePath = process.env.NIUMA_SMOKE_EXECUTABLE && path.resolve(process.env.NIUMA_SMOKE_EXECUTABLE);
 const environment = { ...process.env };
 delete environment.ELECTRON_RUN_AS_NODE;
 delete environment.VITE_DEV_SERVER_URL;
 fs.mkdirSync(userData, { recursive: true });
+fs.mkdirSync(artifacts, { recursive: true });
 
 const passed = [], errors = [], observations = {};
 const record = message => { passed.push(message); console.log(`PASS ${message}`); };
@@ -178,7 +180,8 @@ async function verifyMeal(page, food, away) {
 
 async function verify() {
   assert.equal(process.platform, 'win32', 'This test exercises Windows native pointer hit testing');
-  desktop = await electron.launch({ args: [root, `--user-data-dir=${userData}`], cwd: root,
+  desktop = await electron.launch({ executablePath,
+    args: [...(executablePath ? [] : [root]), `--user-data-dir=${userData}`], cwd: root,
     env: environment, timeout: 30000 });
   desktop.on('window', page => page.on('pageerror', error => errors.push(`${page.url()}: ${error.message}`)));
   desktop.process().stderr?.on('data', data => {
@@ -291,5 +294,6 @@ try {
   fs.writeFileSync(path.join(artifacts, 'pet-feeding-native-result.json'), JSON.stringify({
     status: errors.length ? 'failed' : 'passed', passed, errors, observations, userData,
     physicalSystemInput: true, cursorRestored: Boolean(originalCursor),
+    platform: process.platform, executablePath: executablePath || null,
   }, null, 2));
 }

@@ -8,11 +8,13 @@ import { _electron as electron, expect } from '@playwright/test';
 // window lifecycle, but does not prove physical OS mouse hit testing.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
-const userData = path.join(artifacts, `companion-test-${Date.now()}`);
+const userData = path.join(process.env.NIUMA_SMOKE_DATA_ROOT || artifacts, `companion-test-${Date.now()}`);
+const executablePath = process.env.NIUMA_SMOKE_EXECUTABLE && path.resolve(process.env.NIUMA_SMOKE_EXECUTABLE);
 const environment = { ...process.env };
 delete environment.ELECTRON_RUN_AS_NODE;
 delete environment.VITE_DEV_SERVER_URL;
 fs.mkdirSync(userData, { recursive: true });
+fs.mkdirSync(artifacts, { recursive: true });
 
 const passed = [];
 const failures = [];
@@ -93,7 +95,9 @@ async function restoreByDoubleClick() {
 }
 
 async function verify() {
-  desktop = await electron.launch({ args: [root, `--user-data-dir=${userData}`], cwd: root, env: environment, timeout: 30_000 });
+  desktop = await electron.launch({ executablePath,
+    args: [...(executablePath ? [] : [root]), `--user-data-dir=${userData}`],
+    cwd: root, env: environment, timeout: 30_000 });
   desktop.on('window', page => page.on('pageerror', error => failures.push(`${page.url()}: ${error.message}`)));
   desktop.process().stderr?.on('data', data => {
     const line = data.toString();
@@ -260,6 +264,6 @@ try {
   }
   fs.writeFileSync(path.join(artifacts, 'desktop-companion-result.json'), JSON.stringify({
     status: failures.length ? 'failed' : 'passed', passed, errors: failures, observations, userData,
-    physicalSystemInput: false,
+    physicalSystemInput: false, platform: process.platform, executablePath: executablePath || null,
   }, null, 2));
 }

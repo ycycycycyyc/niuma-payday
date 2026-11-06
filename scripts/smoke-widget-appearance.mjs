@@ -8,7 +8,9 @@ import { petLaneHeight, widgetBoundsInWorkArea, widgetScaleInWorkArea } from '..
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'artifacts', 'widget-appearance-native');
-const userData = path.join(output, `profile-${Date.now()}`);
+const userData = path.join(process.env.NIUMA_SMOKE_DATA_ROOT || output, `appearance-test-${Date.now()}`);
+const executablePath = process.env.NIUMA_SMOKE_EXECUTABLE && path.resolve(process.env.NIUMA_SMOKE_EXECUTABLE);
+fs.mkdirSync(output, { recursive: true });
 fs.mkdirSync(userData, { recursive: true });
 const environment = { ...process.env };
 delete environment.ELECTRON_RUN_AS_NODE;
@@ -25,7 +27,9 @@ const snapshot = () => desktop.evaluate(({ BrowserWindow, screen }) => {
   };
 });
 async function launch() {
-  desktop = await electron.launch({ args: [root, `--user-data-dir=${userData}`], cwd: root, env: environment, timeout: 30_000 });
+  desktop = await electron.launch({ executablePath,
+    args: [...(executablePath ? [] : [root]), `--user-data-dir=${userData}`],
+    cwd: root, env: environment, timeout: 30_000 });
   const main = await desktop.firstWindow();
   await expect(main.getByRole('heading', { level: 1 })).toBeVisible({ timeout: 20_000 });
   return main;
@@ -161,5 +165,7 @@ try {
   record('fresh app and widget restore independently saved appearance without changing main-window scale');
 } finally {
   if (desktop) await desktop.close();
-  fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({ platform: process.platform, passed, userData }, null, 2));
+  fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({
+    platform: process.platform, executablePath: executablePath || null, passed, userData,
+  }, null, 2));
 }
