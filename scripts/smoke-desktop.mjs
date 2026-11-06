@@ -37,6 +37,8 @@ async function verifyDesktop() {
     args: [...(executablePath ? [] : [root]), `--user-data-dir=${userData}`],
     cwd: root, env: environment, timeout: 30_000,
   });
+  desktop.on('console', message => { if (['warning','error'].includes(message.type())) console.log('Electron:', message.text()); });
+  desktop.on('window', page => page.on('pageerror', error => console.error('Page error:', page.url(), error.message)));
   const child = desktop.process();
   child.stderr?.on('data', data => {
     const line = data.toString();
@@ -197,6 +199,21 @@ async function verifyDesktop() {
 try {
   await verifyDesktop();
 } catch (error) {
+  if (desktop) {
+    try {
+      for (const page of desktop.windows()) {
+        const state = await page.evaluate(async () => ({
+          url: location.href, visible: document.visibilityState, phase: await window.niuma?.getDesktopPetState?.().catch(() => null),
+          phases: window.__chasePhases, paintBridge: !!window.petOverlay,
+          status: document.querySelector('.widget-status')?.textContent,
+          dog: document.getElementById('desktop-dog')?.outerHTML,
+          bone: document.getElementById('desktop-bone')?.hidden,
+        }));
+        console.log('Window state at failure', JSON.stringify(state));
+        failures.push(JSON.stringify(state));
+      }
+    } catch { /* The process may already have closed. */ }
+  }
   failures.push(error.stack || error.message || String(error));
   if (main && !main.isClosed()) {
     try { await main.screenshot({ path: path.join(artifacts, 'native-error.png') }); } catch { /* Retain original failure. */ }

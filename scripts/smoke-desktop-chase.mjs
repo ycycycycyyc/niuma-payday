@@ -3,26 +3,24 @@ import { expect } from '@playwright/test';
 
 // Read the painted sprite in desktop DIP, including the actual native window offset.
 async function paintedPet(desktop) {
-  return desktop.evaluate(async ({ BrowserWindow }) => {
-    for (const w of BrowserWindow.getAllWindows()) {
-      if (!w.isVisible() || !w.webContents.getURL().split('?')[0].endsWith('/pet.html')) continue;
-      const frame = await w.webContents.executeJavaScript(`(() => {
-        const dog = document.querySelector('#desktop-dog');
-        if (!dog || !dog.getClientRects().length || dog.hidden) return null;
-        const r = dog.getBoundingClientRect();
-        const bone = document.querySelector('#desktop-bone');
-        return {x:r.x+r.width/2, y:r.y+r.height/2, bone:!!bone && !bone.hidden && !!bone.getClientRects().length};
-      })()`).catch(() => null); // The final frame can close the overlay during this read.
-      if (!frame || w.isDestroyed()) continue;
-      const { x, y } = w.getContentBounds();
-      const zoom = w.webContents.getZoomFactor();
-      return { x:x + frame.x * zoom, y:y + frame.y * zoom, bone:frame.bone, top:w.isAlwaysOnTop() };
-    }
-    return null;
-  });
+  for (const page of desktop.windows().filter(item => item.url().split('?')[0].endsWith('/pet.html'))) {
+    const frame = await page.evaluate(() => {
+      const dog = document.getElementById('desktop-dog');
+      if (!dog || dog.hidden || !dog.getClientRects().length) return null;
+      const r = dog.getBoundingClientRect();
+      const bone = document.getElementById('desktop-bone');
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2, bone: !!bone && !bone.hidden && !!bone.getClientRects().length };
+    }).catch(error => { if (!page.isClosed()) throw error; return null; });
+    if (!frame || page.isClosed()) continue;
+    const native = await desktop.browserWindow(page);
+    try {
+      const win = await native.evaluate(w => ({ ...w.getContentBounds(), zoom:w.webContents.getZoomFactor(), top:w.isAlwaysOnTop(), id:w.getMediaSourceId() }));
+      return { x:win.x + frame.x * win.zoom, y:win.y + frame.y * win.zoom, bone:frame.bone, top:win.top, id:win.id };
+    } finally { await native.dispose(); }
+  }
+  return null;
 }
-
-export async function verifyDesktopChase(desktop, widget, { click, move, clickThrough, stop, raise, record }) {
+export async function verifyDesktopChase(desktop, widget, { click, move, clickThrough, stop, raise, verifyOrder, record }) {
   const button = name => widget.getByRole('button', { name, exact: true });
   const { card, area } = await desktop.evaluate(({ BrowserWindow, screen }) => {
     const w = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().endsWith('#/widget'));
@@ -46,6 +44,7 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
     return pet?.top && pet.bone && Math.hypot(pet.x - target.x, pet.y - target.y) < 100;
   }, { timeout:12000 }).toBe(true);
   const outdoors = await paintedPet(desktop);
+  if (verifyOrder) await verifyOrder(outdoors);
   assert.ok(outdoors.x < card.x || outdoors.x > card.x + card.width || outdoors.y < card.y || outdoors.y > card.y + card.height);
   await expect(widget.locator('.widget-dog')).toBeHidden();
   await clickThrough({ x:Math.round(outdoors.x), y:Math.round(outdoors.y) });
