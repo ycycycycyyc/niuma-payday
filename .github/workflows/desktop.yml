@@ -1,0 +1,79 @@
+name: Desktop builds
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'electron/**'
+      - 'shared/**'
+      - 'tests/**'
+      - 'scripts/smoke-desktop.mjs'
+      - 'build/**'
+      - 'package*.json'
+      - 'electron-builder.yml'
+      - 'playwright.config.ts'
+      - '.github/workflows/desktop.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            arch: x64
+            executable: release/win-unpacked/牛马鼓励器.exe
+          - os: macos-15
+            target: mac
+            arch: arm64
+            executable: release/mac-arm64/牛马鼓励器.app/Contents/MacOS/牛马鼓励器
+          - os: macos-15-intel
+            target: mac
+            arch: x64
+            executable: release/mac/牛马鼓励器.app/Contents/MacOS/牛马鼓励器
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Build desktop package
+        run: npx electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify packaged native windows and settings
+        run: node scripts/smoke-desktop.mjs
+        timeout-minutes: 5
+        env:
+          NIUMA_SMOKE_EXECUTABLE: ${{ matrix.executable }}
+          NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-smoke
+      - name: Save native window evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Niuma-smoke-${{ matrix.target }}-${{ matrix.arch }}
+          path: |
+            artifacts/native-smoke-result.json
+            artifacts/native-main.png
+            artifacts/native-widget.png
+            artifacts/native-error.png
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Niuma-${{ matrix.target }}-${{ matrix.arch }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
