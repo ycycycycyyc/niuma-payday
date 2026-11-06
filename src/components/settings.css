@@ -1,72 +1,61 @@
-.settings-dialog { --settings-ink: #4e253c; --settings-muted: #ac7c8b; --settings-line: #f2e0d7; box-sizing: border-box; width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); margin: auto; padding: 0; border: 1px solid #f0dcd3; border-radius: 24px; background: #fefaf4; color: var(--settings-ink); box-shadow: 0 24px 100px #49223930; overflow: auto; }
-.settings-dialog::backdrop { background: #4a233ac0; backdrop-filter: blur(5px); }
+.settings-dialog { --settings-ink: var(--ink); --settings-muted: var(--muted); --settings-line: var(--line); box-sizing: border-box; width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); margin: auto; padding: 0; border: 1px solid var(--pink-edge); border-radius: 24px; background: var(--surface); color: var(--settings-ink); box-shadow: 0 24px 100px #49223930; overflow: auto; }
+.settings-dialog::backdrop { background: #38263485; backdrop-filter: blur(5px); }
 .settings-dialog *, .settings-dialog *::before, .settings-dialog *::after { box-sizing: border-box; }
 .settings-form { margin: 0; }
-.settings-header { position: relative; padding: 30px 32px 24px; background: #f8eee5; border-bottom: 1px solid var(--settings-line); }
-.settings-eyebrow { display: flex; align-items: center; gap: 7px; color: #765560; font-size: 10px; font-weight: 700; letter-spacing: 1.5px; }
+.settings-header { position: relative; padding: 30px 32px 24px; background: var(--dialogue-pink); border-bottom: 1px solid var(--settings-line); }
+.settings-eyebrow { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 1.5px; }
 .settings-header h2 { margin: 14px 0 8px; font-size: clamp(25px, 4vw, 30px); font-weight: 650; letter-spacing: -1px; line-height: 1.35; }
 .settings-header p { margin: 0; color: var(--settings-muted); font-size: 13px; }
-.settings-close { position: absolute; top: 20px; right: 20px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid #efdbd2; border-radius: 50%; background: #fefaf4; color: #694450; cursor: pointer; }
-.settings-close:hover { background: #f3e1d8; }
+.settings-close { position: absolute; top: 20px; right: 20px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--pink-edge); border-radius: 50%; background: var(--surface); color: var(--berry-ink); cursor: pointer; }
+.settings-close:hover { background: var(--rose); }
 .settings-body { padding: 25px 32px 20px; }
 .settings-section { min-width: 0; margin: 0 0 24px; padding: 0; border: 0; }
 .settings-section legend { width: 100%; margin-bottom: 16px; padding: 0; font-size: 14px; font-weight: 600; }
-.settings-section legend > span { margin-right: 8px; color: #805f66; font: 11px ui-monospace, monospace; }
+.settings-section legend > span { margin-right: 8px; color: var(--muted); font: 11px ui-monospace, monospace; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .settings-salary-grid { grid-template-columns: 1.45fr 1fr; }
 .settings-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.settings-field > label, .settings-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: #765560; }
-.settings-field > input, .settings-field > select { width: 100%; min-width: 0; height: 44px; padding: 0 13px; border: 1px solid #eed9d0; border-radius: 9px; background: #fffdf8; color: var(--settings-ink); font: inherit; font-size: 14px; font-variant-numeric: tabular-nums; }
-.settings-field > input:focus, .settings-field > select:focus { outline: 2px solid #e1c1c1; outline-offset: 1px; }
-.settings-field [aria-invalid="true"] { border-color: #a27182; }
+.settings-field > label, .settings-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.settings-field > input, .settings-field > select { width: 100%; min-width: 0; height: 44px; padding: 0 13px; border: 1px solid #d8bdce; border-radius: 9px; background: var(--surface); color: var(--settings-ink); font: inherit; font-size: 14px; font-variant-numeric: tabular-nums; }
+.settings-field > input:focus, .settings-field > select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings-field [aria-invalid="true"] { border-color: #a43e5d; }
 .settings-field > input[type="number"]#settings-dailySalary { font-size: 20px; font-weight: 600; }
 .settings-hint { margin: 0; color: var(--settings-muted); font-size: 11px; line-height: 1.6; }
 .settings-shift-hint { margin-top: 8px; }
 .settings-payday { margin-top: 16px; }
-.settings-payday-input { display: flex; align-items: center; gap: 9px; color: #765560; font-size: 13px; }
-.settings-payday-input input { width: 70px; height: 36px; padding: 0 8px; border: 1px solid #eed9d0; border-radius: 8px; background: #fffdf8; color: var(--settings-ink); font: inherit; text-align: center; }
+.settings-payday-input { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
+.settings-payday-input input { width: 70px; height: 36px; padding: 0 8px; border: 1px solid #d8bdce; border-radius: 8px; background: var(--surface); color: var(--settings-ink); font: inherit; text-align: center; }
 .settings-workdays { margin-top: 18px; }
 .settings-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 7px; }
-.settings-days button { position: relative; display: grid; place-items: center; min-height: 40px; padding: 8px 0; border: 1px solid #eed9d0; border-radius: 8px; background: #fffdf8; color: #805f66; font: inherit; font-size: 13px; cursor: pointer; transition: background 120ms, border-color 120ms; }
-.settings-days button.is-selected { border-color: #e5c8c4; background: #f5e7dd; color: #694450; }
+.settings-days button { position: relative; display: grid; place-items: center; min-height: 40px; padding: 8px 0; border: 1px solid #d8bdce; border-radius: 8px; background: var(--surface); color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; transition: background 120ms, border-color 120ms; }
+.settings-days button.is-selected { border-color: var(--pink-edge); background: var(--rose); color: var(--berry-ink); }
 .settings-days button svg { position: absolute; top: 3px; right: 3px; }
-.settings-days button:hover { border-color: #c69da4; }
-.settings-lunch { margin-top: 20px; padding: 16px; border: 1px solid var(--settings-line); border-radius: 12px; background: #fbf4eb; }
+.settings-days button:hover { border-color: var(--accent); }
+.settings-lunch { margin-top: 20px; padding: 16px; border: 1px solid var(--settings-line); border-radius: 12px; background: var(--shell-pink); }
 .settings-toggle-label { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; }
 .settings-toggle-label strong { display: block; font-size: 13px; font-weight: 500; }
 .settings-toggle-label small { display: block; margin-top: 4px; color: var(--settings-muted); font-size: 11px; }
 .settings-switch-input { position: absolute; right: 0; width: 40px; height: 24px; margin: 0; opacity: 0; }
-.settings-switch { position: relative; flex-shrink: 0; display: inline-block; width: 38px; height: 22px; border-radius: 14px; background: #ebd3cc; transition: background 140ms; pointer-events: none; }
-.settings-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fffdf8; box-shadow: 0 1px 3px #23182122; transition: transform 140ms; }
-.settings-switch-input:checked + .settings-switch { background: #946276; }
+.settings-switch { position: relative; flex-shrink: 0; display: inline-block; width: 38px; height: 22px; border-radius: 14px; background: #dcc8d4; transition: background 140ms; pointer-events: none; }
+.settings-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px #23182122; transition: transform 140ms; }
+.settings-switch-input:checked + .settings-switch { background: #9a5179; }
 .settings-switch-input:checked + .settings-switch::after { transform: translateX(16px); }
-.settings-switch-input:focus-visible + .settings-switch { outline: 2px solid #b2838f; outline-offset: 4px; }
+.settings-switch-input:focus-visible + .settings-switch { outline: 2px solid var(--accent); outline-offset: 4px; }
 .settings-lunch-times { margin-top: 16px; }
-.settings-note { display: flex; align-items: flex-start; gap: 9px; color: #805f66; }
+.settings-note { display: flex; align-items: flex-start; gap: 9px; color: var(--muted); }
 .settings-note svg { flex-shrink: 0; margin-top: 2px; }
 .settings-note p { margin: 0; font-size: 11px; line-height: 1.75; }
-.settings-error { color: #694450; font-size: 11px; line-height: 1.6; }
-.settings-save-error { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #ebd3cc; border-radius: 8px; background: #faf2e9; color: #694450; font-size: 12px; }
-.settings-footer { position: sticky; bottom: 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 32px; border-top: 1px solid var(--settings-line); background: #fefaf4; }
+.settings-error { color: #923849; font-size: 11px; line-height: 1.6; }
+.settings-save-error { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #dcc8d4; border-radius: 8px; background: #fff0f3; color: #923849; font-size: 12px; }
+.settings-footer { position: sticky; bottom: 0; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 32px; border-top: 1px solid var(--settings-line); background: var(--surface); }
 .settings-cancel, .settings-submit { display: inline-flex; align-items: center; justify-content: center; gap: 14px; min-height: 44px; padding: 0 16px; border: 0; border-radius: 10px; font: inherit; font-size: 13px; cursor: pointer; }
-.settings-cancel { padding-left: 0; background: transparent; color: #765560; }
-.settings-submit { background: #5b2c44; color: #fff7ee; font-weight: 500; }
-.settings-submit:hover { background: #733f58; }
-.settings-dialog button:focus-visible, .settings-dialog input:focus-visible, .settings-dialog select:focus-visible, .settings-days:focus-visible { outline: 2px solid #b38490; outline-offset: 3px; }
+.settings-cancel { padding-left: 0; background: transparent; color: var(--muted); }
+.settings-submit { background: var(--action); color: #59213f; font-weight: 650; border: 1px solid #daa2c0; }
+.settings-submit:hover { background: var(--action-hover); border-color: #c68aa9; }
+.settings-dialog button:focus-visible, .settings-dialog input:focus-visible, .settings-dialog select:focus-visible, .settings-days:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .settings-dialog button:disabled, .settings-dialog input:disabled, .settings-dialog select:disabled { cursor: wait; opacity: .6; }
-.settings-dialog { --settings-ink: #432d37; --settings-muted: #765a62; --settings-line: #ead8cc; background: #fff9f0; }
-.settings-header { background: #f8e1e1; border-color: #e9cbd0; }
-.settings-header .settings-eyebrow { color: #854a62; }
-.settings-body .settings-section legend { color: #543140; }
-.settings-section legend > span { color: #8e5166; }
-.settings-lunch { background: #fbede4; border-color: #ead7c9; }
-.settings-switch-input:checked + .settings-switch { background: #813d59; }
-.settings-switch-input:focus-visible + .settings-switch { outline-color: #944a69; }
-.settings-submit { color: #fffaf0; background: #753550; }
-.settings-submit:hover { background: #90425f; }
-.settings-footer { background: #fff9f0; }
-.settings-dialog .schedule-summary { margin-top: 16px; font-size: 11px; color: #705239; background: #fbefd5; border-color: #ead9ad; }
-.settings-error, .settings-save-error { color: #943c48; }
+.settings-dialog .schedule-summary { margin-top: 16px; font-size: 11px; color: var(--muted); background: var(--shell-pink); border-color: var(--line); }
+.settings-dialog .schedule-summary strong { color: var(--berry-ink); }
 .settings-dialog .advanced-settings { margin: 0 0 21px; padding-top: 16px; }
 .settings-dialog .advanced-settings summary { padding: 4px 0; font-size: 12px; }
 .settings-dialog .advanced-settings[open] summary { margin-bottom: 0; }

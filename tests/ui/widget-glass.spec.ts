@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { DEFAULT_SETTINGS } from '../../src/lib/salary';
+import { backgroundGain, compareImages, paintBackdrop, paintSample, textContrast } from './widget-optics';
 
 const output = path.resolve('artifacts/widget-glass-qa');
 const offlinePreview = path.resolve('artifacts/preview/Niuma-Glass-Preview.html');
@@ -55,6 +56,19 @@ async function widgetMetrics(page: Page) {
   });
 }
 
+async function widgetContrast(card: Locator) {
+  const restore = card.getByRole('button', { name: '返回主窗口' }).locator('svg');
+  const hide = card.getByRole('button', { name: '隐藏浮窗' }).locator('svg');
+  const result = {
+    time: await textContrast(card.locator('.widget-time-value')),
+    amount: await textContrast(card.locator('.amount-integer')),
+    restoreIcon: await textContrast(restore),
+    hideIcon: await textContrast(hide),
+  };
+  for (const ink of Object.values(result)) expect(ink.tenthPercentile).toBeGreaterThanOrEqual(3);
+  return result;
+}
+
 // Measure the rasterized card, including its CSS layers and inherited backgrounds.
 // Exclude rounded corners and the border so the shape alone cannot pass this check.
 async function glassOpacity(page: Page) {
@@ -68,6 +82,13 @@ async function glassOpacity(page: Page) {
     const context = canvas.getContext('2d')!;
     context.drawImage(image, 0, 0);
     const pixels = context.getImageData(20, 20, canvas.width - 40, canvas.height - 40).data;
+    const clearCenter = context.getImageData(
+      Math.floor(canvas.width * .54), Math.floor(canvas.height * .35),
+      Math.floor(canvas.width * .09), Math.floor(canvas.height * .23),
+    ).data;
+    const centerAlphas: number[] = [];
+    for (let i = 3; i < clearCenter.length; i += 4) centerAlphas.push(clearCenter[i]);
+    centerAlphas.sort((a, b) => a - b);
     let translucent = 0;
     const histogram = new Array<number>(256).fill(0);
     for (let i = 3; i < pixels.length; i += 4) {
@@ -78,7 +99,11 @@ async function glassOpacity(page: Page) {
     const count = pixels.length / 4;
     let cumulative = 0;
     const median = histogram.findIndex(frequency => (cumulative += frequency) >= count / 2);
-    return { fractionTranslucent: translucent / count, medianAlpha: median };
+    return {
+      fractionTranslucent: translucent / count,
+      medianAlpha: median,
+      centerAlpha: centerAlphas[Math.floor(centerAlphas.length / 2)],
+    };
   }, png.toString('base64'));
 }
 
@@ -145,6 +170,136 @@ test('maximum supported HKD salary, mascot, countdown and controls stay inside n
   await page.screenshot({ path: path.join(output, 'narrow-hkd.png'), omitBackground: true });
 });
 
+test('dashboard and floating glass paint the shared dialogue pink and keep salary and controls legible', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  const hero = page.locator('.earnings-card');
+  await expect(hero).toBeVisible();
+  const sample = await paintSample(hero, .58, .44);
+  await expect(hero).toHaveCSS('background-color', 'rgb(253, 237, 244)');
+  expect(sample).toEqual([253, 237, 244]);
+  const mainInk = {
+    amount: await textContrast(hero.locator('.amount-integer')),
+    decimal: await textContrast(hero.locator('.amount-decimal')),
+    privacyIcon: await textContrast(hero.locator('.earnings-caption button svg')),
+    openButton: await textContrast(hero.locator('.hero-footer button')),
+  };
+  expect(mainInk.amount.tenthPercentile).toBeGreaterThanOrEqual(3);
+  expect(mainInk.decimal.tenthPercentile).toBeGreaterThanOrEqual(3);
+  expect(mainInk.privacyIcon.tenthPercentile).toBeGreaterThanOrEqual(3);
+  expect(mainInk.openButton.tenthPercentile).toBeGreaterThanOrEqual(4.5);
+
+  await hero.locator('.hero-footer button').click();
+  const card = page.locator('.widget');
+  await expect(card).toBeVisible();
+  await paintBackdrop(page, 'white');
+  const onWhite = await paintSample(card, .60, .44);
+  await paintBackdrop(page, 'black');
+  const onBlack = await paintSample(card, .60, .44);
+  // Verify the actual composite. The centre remains transparent so its visible colour changes with the wallpaper.
+  for (let channel = 0; channel < sample.length; channel++) {
+    const transmission = (onWhite[channel] - onBlack[channel]) / 255;
+    expect(transmission).toBeGreaterThan(.7);
+    expect(transmission).toBeLessThan(.95);
+    expect(Math.abs(onBlack[channel] - sample[channel] * (1 - transmission))).toBeLessThanOrEqual(1.5);
+  }
+
+  // A token change must repaint both surfaces. This catches copies of the same hard-coded hex.
+  await page.evaluate(() => document.documentElement.style.setProperty('--dialogue-pink', '#0080ff'));
+  expect(await paintSample(hero, .58, .44)).toEqual([0, 128, 255]);
+  const blueGlass = await paintSample(card, .60, .44);
+  expect(blueGlass[0]).toBeLessThanOrEqual(2);
+  expect(blueGlass[1]).toBeGreaterThan(10);
+  expect(blueGlass[2]).toBeGreaterThan(blueGlass[1] + 8);
+  fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(path.join(output, 'pink-surfaces.json'), JSON.stringify({ sample, onWhite, onBlack, mainInk }, null, 2));
+});
+
+test('the transparent center passes the wallpaper; the rounded rim deflects actual background texture', async ({ browser, page }) => {
+  const capture = () => page.locator('.widget').screenshot({ animations: 'disabled', scale: 'css' });
+  const previous = path.resolve('release/v1.0.4/Niuma-Glass-Preview.html');
+  let previousGain: number | null = null;
+  if (fs.existsSync(previous)) {
+    const baseline = await browser.newPage({ viewport: { width: 800, height: 600 }, reducedMotion: 'reduce' });
+    try {
+      await baseline.goto(pathToFileURL(previous).href);
+      await expect(baseline.locator('.widget')).toBeVisible();
+      previousGain = await backgroundGain(baseline);
+    } finally {
+      await baseline.close();
+    }
+  }
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 376, height: 272 });
+  await openWidget(page);
+  await expect(page.locator('.widget')).toHaveAttribute('data-refraction', 'svg');
+  const opacity = await glassOpacity(page);
+  const gain = await backgroundGain(page);
+  await paintBackdrop(page, 'stripes');
+  const withLens = await capture();
+  const displacement = page.locator('feDisplacementMap');
+  await expect(displacement).toHaveCount(1);
+  await displacement.evaluate(node => node.setAttribute('scale', '0'));
+  const flat = await capture();
+  const { edge } = await compareImages(page, withLens, flat);
+  fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(path.join(output, 'lens-on.png'), withLens);
+  fs.writeFileSync(path.join(output, 'lens-zero.png'), flat);
+  fs.writeFileSync(path.join(output, 'optics.json'), JSON.stringify({ previousGain, gain, opacity, edge }, null, 2));
+
+  // Black→white wallpaper must materially change the empty central area.
+  expect(gain).toBeGreaterThan(.7);
+  expect(opacity.centerAlpha).toBeLessThan(70);
+  if (previousGain !== null) expect(gain - previousGain).toBeGreaterThan(.25);
+  const deflected = edge.filter(p => Math.abs(p.shift) >= 3 && p.confidence > .85 && p.confidence - p.zeroScore > .1);
+  const left = deflected.filter(p => p.x < 20);
+  const right = deflected.filter(p => p.x > 350);
+  expect(left.length).toBeGreaterThan(0);
+  expect(right.length).toBeGreaterThan(0);
+  expect(Math.sign(left[0].shift)).toBe(-Math.sign(right[0].shift));
+  const center = edge.find(p => p.x > 180 && p.x < 240)!;
+  expect(Math.abs(center.shift)).toBeLessThanOrEqual(1);
+});
+
+test('offline preview preserves readable day and night digits without CSS URL backdrop filters', async ({ browser }) => {
+  test.skip(!fs.existsSync(offlinePreview), 'Build the standalone preview to run this export check.');
+  const context = await browser.newContext({
+    viewport: { width: 1080, height: 700 },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15',
+    offline: true,
+    reducedMotion: 'reduce',
+  });
+  try {
+    // Run the unsupported-URL branch in Chromium. This does not emulate the WebKit renderer.
+    await context.addInitScript(() => {
+      const supported = CSS.supports.bind(CSS);
+      CSS.supports = (property, value?: string) => {
+        if (value === undefined) return supported(property);
+        if (property === 'backdrop-filter' && value.includes('url(')) return false;
+        return supported(property, value);
+      };
+    });
+    const page = await context.newPage();
+    await page.goto(pathToFileURL(offlinePreview).href);
+    const card = page.locator('.widget');
+    await expect(card).toHaveAttribute('data-refraction', 'fallback');
+    await expect(card).toHaveCSS('backdrop-filter', /blur\(/);
+    await expect(page.locator('.preview-wallpaper-lens')).toBeVisible();
+    const ratios = [];
+    for (const [label, mode] of [['日光', 'light'], ['夜色', 'dark']]) {
+      await page.getByRole('button', { name: label, exact: true }).click();
+      await expect(page.locator('.preview-scene')).toHaveAttribute('data-glass-scene', mode);
+      ratios.push({ mode, ...await widgetContrast(card) });
+    }
+    expect(ratios[0].time.color).not.toEqual(ratios[1].time.color);
+    fs.mkdirSync(output, { recursive: true });
+    fs.writeFileSync(path.join(output, 'fallback-contrast.json'), JSON.stringify(ratios, null, 2));
+  } finally {
+    await context.close();
+  }
+});
+
 test('standalone HTML runs from file offline, changes wallpaper, ticks and reopens', async ({ page, context }) => {
   test.skip(!fs.existsSync(offlinePreview), 'Build the standalone preview to run this export check.');
   const external: string[] = [];
@@ -163,19 +318,51 @@ test('standalone HTML runs from file offline, changes wallpaper, ticks and reope
   expect(before).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   await page.clock.runFor(1000);
   expect(seconds(before) - seconds(await clock.innerText())).toBe(1);
+  const contrast = [];
   for (const theme of ['夜色', '日光']) {
     const choice = page.getByRole('button', { name: theme, exact: true });
     await choice.click();
     await expect(choice).toHaveAttribute('aria-pressed', 'true');
     const dark = theme === '夜色';
     await expect(page.locator('.preview-scene')).toHaveAttribute('data-theme', dark ? 'night' : 'day');
+    contrast.push({ theme, ...await widgetContrast(card) });
     fs.mkdirSync(output, { recursive: true });
     await page.screenshot({ path: path.join(output, dark ? 'offline-night.png' : 'offline-day.png'), animations: 'disabled' });
   }
+  fs.writeFileSync(path.join(output, 'preview-contrast.json'), JSON.stringify(contrast, null, 2));
   await card.getByRole('button', { name: '隐藏浮窗' }).click();
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: '开启浮窗', exact: true }).click();
   await expect(card).toBeVisible();
+  const views = page.getByRole('group', { name: '预览视图' });
+  await views.getByRole('button', { name: '主界面', exact: true }).click();
+  const main = page.frameLocator('iframe[title="主界面演示"]');
+  const salaryCard = main.locator('.earnings-card');
+  await expect(salaryCard).toBeVisible();
+  expect(await paintSample(salaryCard, .58, .44)).toEqual([253, 237, 244]);
+  await main.getByRole('button', { name: '设置我的日薪', exact: true }).click();
+  const settings = main.getByRole('dialog');
+  const dailySalary = settings.getByLabel('日薪', { exact: true });
+  const startTime = settings.getByLabel('上班时间', { exact: true });
+  const endTime = settings.getByLabel('下班时间', { exact: true });
+  // The test clock is Friday afternoon. This completed custom shift earns the whole day rate.
+  await dailySalary.fill('399');
+  await startTime.fill('06:11');
+  await endTime.fill('07:22');
+  await settings.getByRole('button', { name: '保存并开始计薪' }).click();
+  await expect(settings).toHaveCount(0);
+  await expect(salaryCard.locator('.amount-integer')).toHaveText('399');
+  await main.getByRole('button', { name: '工资与偏好设置' }).click();
+  await expect(dailySalary).toHaveValue('399');
+  await expect(startTime).toHaveValue('06:11');
+  await expect(endTime).toHaveValue('07:22');
+  await settings.getByRole('button', { name: '先不改了' }).click();
+  await salaryCard.getByRole('button', { name: '开启悬浮窗' }).click();
+  await expect(card).toBeVisible();
+  await expect(views.getByRole('button', { name: '浮窗', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.locator('.widget-time-value')).toHaveText('06:11–07:22');
+  await expect(card.locator('.amount-integer')).toHaveText('399');
+  await expect(card.locator('.amount-decimal')).toHaveText('.00');
   expect(external).toEqual([]);
   expect(errors).toEqual([]);
 });

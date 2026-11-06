@@ -36,8 +36,8 @@ if (chunks.length !== 1 || styles.length !== 1 || output.length !== 2) {
 const template = await readFile(path.join(root, 'preview.html'), 'utf8');
 const css = String(styles[0].source).replace(/<\/style/gi, '<\\/style');
 const js = chunks[0].code.replace(/<\/script/gi, '<\\/script');
-const html = template.replace('</head>', () => `<style>${css}</style>\n</head>`)
-  .replace('<script type="module" src="/src/widget-preview.tsx"></script>', () => `<script>${js}</script>`);
+const html = template.replace('</head>', () => `<style id="preview-styles">${css}</style>\n</head>`)
+  .replace('<script type="module" src="/src/widget-preview.tsx"></script>', () => `<script id="preview-bundle">${js}</script>`);
 const destination = path.join(directory, 'Niuma-Glass-Preview.html');
 await mkdir(directory, { recursive: true });
 await writeFile(destination, html);
