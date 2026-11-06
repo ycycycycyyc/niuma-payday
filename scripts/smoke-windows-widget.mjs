@@ -25,36 +25,6 @@ async function center(locator) {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-// Inspect the live native menu already installed by Tray.setContextMenu: it is the
-// only menu containing both of these labels. This exercises its registered action
-// even on runners where Explorer hides the notification area in its overflow.
-async function restoreFromTray(desktop) {
-  await desktop.evaluate(async ({ Menu }) => {
-    const { Session } = process.getBuiltinModule('node:inspector/promises');
-    const inspector = new Session();
-    inspector.connect();
-    globalThis.__widgetSmokeMenuPrototype = Menu.prototype;
-    try {
-      const { result } = await inspector.post('Runtime.evaluate', { expression: 'globalThis.__widgetSmokeMenuPrototype', objectGroup: 'widget-smoke' });
-      const { objects } = await inspector.post('Runtime.queryObjects', { prototypeObjectId: result.objectId, objectGroup: 'widget-smoke' });
-      const response = await inspector.post('Runtime.callFunctionOn', {
-        objectId: objects.objectId, returnByValue: true,
-        functionDeclaration: function () {
-          const trays = this.filter(menu => menu.items?.some(item => item.label === '显示工资浮窗'));
-          const action = trays[0]?.items.find(item => item.label === '将浮窗置顶');
-          if (trays.length !== 1 || !action?.enabled || !action.visible) return false;
-          action.click();
-          return true;
-        }.toString(),
-      });
-      if (response.result.value !== true) throw new Error('Could not invoke the installed tray menu action: ' + JSON.stringify(response));
-    } finally {
-      delete globalThis.__widgetSmokeMenuPrototype;
-      inspector.disconnect();
-    }
-  });
-}
-
 export async function verifyWindowsWidget(desktop, widget, scratch, record, baseline) {
   assert.equal(process.platform, 'win32');
   assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Only run real system input in the isolated CI desktop');
@@ -64,7 +34,8 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
   if (baseline) assert.equal(version, '1.1.0');
   const compiler = path.join(process.env.WINDIR, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
   const tool = path.join(scratch, 'window-input.exe');
-  await run(compiler, ['/nologo', '/target:exe', '/platform:x64', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/out:' + tool, source], { windowsHide: true });
+  const references = ['WindowsBase.dll', 'UIAutomationClient.dll', 'UIAutomationTypes.dll'].map(name => '/r:' + path.join(path.dirname(compiler), 'WPF', name));
+  await run(compiler, ['/nologo', '/target:exe', '/platform:x64', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', ...references, '/out:' + tool, source], { windowsHide: true });
   const invoke = async (action, point, hwnd) => {
     const args = [action, ...(point ? [point.x, point.y] : []), ...(hwnd ? [hwnd] : [])].map(String);
     return (await run(tool, args, { windowsHide: true, timeout: 5000 })).stdout.trim();
@@ -148,38 +119,6 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
       await expect(button('拿起骨头')).toHaveAttribute('aria-pressed', 'false');
     });
 
-    if (!baseline) {
-      const overlap = await nativePoint(desktop, await center(widget.locator('.widget-middle')));
-      await click(button('将浮窗置底'));
-      // Do not activate or move the covering window after clicking the layer
-      // button: it must already be in front without a second user action.
-      await expect.poll(() => invoke('hit', overlap)).toBe(String(receiver));
-      await invoke('click', overlap, receiver);
-      await expect.poll(() => clicks).toBe(3);
-      await restoreFromTray(desktop);
-      await expect.poll(() => invoke('hit', overlap)).toBe(String(state.hwnd));
-      await expect(button('将浮窗置底')).toBeVisible();
-      await click(button('将浮窗置底'));
-      await expect.poll(() => invoke('hit', overlap)).toBe(String(receiver));
-      record('a normal application immediately covers the lowered widget and receives the click, then the registered tray action restores topmost order');
-    }
-  } finally {
-    await closeCover();
-  }
-
-  if (!baseline) {
-    await click(button('将浮窗置顶'));
-    await expect(button('将浮窗置底')).toBeVisible();
-    record('a real click on the exposed bottom widget brings it back to the top');
-    const before = (await windowState()).bounds;
-    await invoke('drag', await nativePoint(desktop, await center(widget.locator('.widget-middle'))), state.hwnd);
-    await expect.poll(async () => {
-      const after = (await windowState()).bounds;
-      return before.x - after.x > 10 && before.y - after.y > 5;
-    }).toBe(true);
-    record('dragging the native card body moves the desktop widget');
-  }
-  if (baseline) {
     const main = desktop.windows().find(page => !page.url().includes('#/widget'));
     await check('real return button restores the main window', async () => {
       await click(button('返回主窗口'));
@@ -191,6 +130,42 @@ export async function verifyWindowsWidget(desktop, widget, scratch, record, base
       await click(button('隐藏浮窗'));
       await expect.poll(async () => (await windowState()).visible).toBe(false);
     });
+    if (!baseline) {
+      await main.evaluate(() => window.niuma.showWidget());
+      const overlap = await nativePoint(desktop, await center(widget.locator('.widget-middle')));
+      await click(button('将浮窗置底'));
+      await expect.poll(() => invoke('hit', overlap)).toBe(String(receiver));
+      await invoke('click', overlap, receiver);
+      await expect.poll(() => clicks).toBe(3);
+      record('a normal application immediately covers the lowered widget and receives the system click');
+      const coverAction = action => run(tool, [action, String(receiver), String(cover.pid)], { windowsHide: true });
+      await coverAction('hide-cover');
+      await click(button('将浮窗置顶'));
+      await expect(button('将浮窗置底')).toBeVisible();
+      record('a real click on the exposed bottom widget brings it back to the top');
+      const before = (await windowState()).bounds;
+      await invoke('drag', await nativePoint(desktop, await center(widget.locator('.widget-middle'))), state.hwnd);
+      await expect.poll(async () => {
+        const after = (await windowState()).bounds;
+        return before.x - after.x > 10 && before.y - after.y > 5;
+      }).toBe(true);
+      record('dragging the native card body moves the desktop widget');
+
+      await coverAction('show-cover');
+      const card = await nativePoint(desktop, await center(widget.locator('.widget-middle')));
+      await click(button('将浮窗置底'));
+      await expect.poll(() => invoke('hit', card)).toBe(String(receiver));
+      await invoke('click', card, receiver);
+      await expect.poll(() => clicks).toBe(4);
+      const pid = await desktop.evaluate(({ app }) => { app.setAccessibilitySupportEnabled(true); return process.pid; });
+      const { stdout } = await run(tool, ['tray', String(pid), String(receiver)], { windowsHide: true, timeout: 25000 });
+      console.log(stdout.trim());
+      await expect.poll(() => invoke('hit', card)).toBe(String(state.hwnd));
+      await expect(button('将浮窗置底')).toBeVisible();
+      record(stdout.trim() + ' restored topmost order over the independent application');
+    }
+  } finally {
+    await closeCover();
   }
   return { click, version, observations };
 }

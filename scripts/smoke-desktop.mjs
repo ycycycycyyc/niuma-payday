@@ -210,9 +210,16 @@ try {
 } finally {
   if (desktop) {
     const child = desktop.process();
-    await desktop.close();
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 8_000 }).toBe(true);
-    record('Electron process closed cleanly');
+    try {
+      await desktop.close();
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null, { timeout: 8_000 }).toBe(true);
+      assert.equal(child.exitCode, 0, `Electron exited with code ${child.exitCode} and signal ${child.signalCode}`);
+      record('Electron process closed cleanly');
+    } catch (error) {
+      failures.push(error.message);
+      console.error(error.message);
+      process.exitCode = 1;
+    }
   }
   const filename = windowsBaseline ? 'windows-baseline-result.json' : 'native-smoke-result.json';
   const evidence = { status: failures.length ? 'failed' : windowsBaseline ? 'observed' : 'passed', passed, errors: failures, userData,
