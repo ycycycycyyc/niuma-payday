@@ -1,0 +1,52 @@
+appId: studio.niuma.payday
+productName: 牛马鼓励器
+copyright: Copyright © 2026 Niuma
+asar: true
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - electron/**/*
+  - shared/**/*
+  - build/icon.png
+  - build/tray.png
+  - build/trayTemplate.png
+  - build/trayTemplate@2x.png
+  - package.json
+artifactName: Niuma-${version}-${os}-${arch}.${ext}
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: portable
+      arch: [x64, arm64]
+nsis:
+  artifactName: Niuma-${version}-windows-${arch}-setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+portable:
+  artifactName: Niuma-${version}-windows-${arch}-portable.${ext}
+mac:
+  icon: build/icon.png
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  identity: null
+dmg:
+  title: 牛马鼓励器
+  iconSize: 96
+  contents:
+    - x: 140
+      y: 180
+    - x: 420
+      y: 180
+      type: link
+      path: /Applications
