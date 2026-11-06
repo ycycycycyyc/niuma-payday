@@ -6,8 +6,12 @@ on:
       platforms:
         description: Platforms to build
         type: choice
-        options: [mac, all]
+        options: [mac, win, all]
         default: mac
+      compare_windows_110:
+        description: Also check pointer input on the published Windows 1.1.0 portable
+        type: boolean
+        default: false
   push:
     tags: ['v*']
   pull_request:
@@ -16,7 +20,8 @@ on:
       - 'electron/**'
       - 'shared/**'
       - 'tests/**'
-      - 'scripts/smoke-desktop.mjs'
+      - 'scripts/smoke-*'
+      - 'scripts/unpack-windows-portable.ps1'
       - 'build/**'
       - 'package*.json'
       - 'electron-builder.yml'
@@ -33,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platforms == 'mac' && '["mac"]' || '["mac","win"]') }}
+        target: ${{ fromJSON(inputs.platforms == 'mac' && '["mac"]' || inputs.platforms == 'win' && '["win"]' || '["mac","win"]') }}
         arch: [arm64, x64]
         exclude:
           - target: win
@@ -60,6 +65,27 @@ jobs:
       - name: Build Windows packages
         if: matrix.target == 'win'
         run: npx --no-install electron-builder --win nsis portable --x64 --publish never
+      - name: Extract the Windows portable for native checks
+        id: win
+        if: matrix.target == 'win'
+        shell: pwsh
+        run: |
+          $portable = (Get-ChildItem release -Filter '*-windows-x64-portable.exe').FullName
+          $exe = ./scripts/unpack-windows-portable.ps1 $portable (Join-Path $env:RUNNER_TEMP 'niuma-portable')
+          "executable=$exe" >> $env:GITHUB_OUTPUT
+      - name: Compare system clicks on the previous Windows portable
+        if: matrix.target == 'win' && inputs.compare_windows_110
+        shell: pwsh
+        env:
+          NIUMA_WINDOWS_NATIVE_INPUT: '1'
+          NIUMA_WINDOWS_BASELINE: '1'
+          NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-baseline
+        run: |
+          $portable = Join-Path $env:RUNNER_TEMP 'Niuma-1.1.0-windows-x64-portable.exe'
+          Invoke-WebRequest 'https://github.com/ycycycycyyc/niuma-payday/releases/download/windows-v1.1.0/Niuma-1.1.0-windows-x64-portable.exe' -OutFile $portable
+          if ((Get-FileHash -LiteralPath $portable).Hash -ne '996a5bad1860cac3c7b7d4494e410b472084a63a892d97aaf1f9262c9854a48e') { throw 'Wrong baseline package' }
+          $env:NIUMA_SMOKE_EXECUTABLE = ./scripts/unpack-windows-portable.ps1 $portable (Join-Path $env:RUNNER_TEMP 'niuma-1.1.0')
+          node scripts/smoke-desktop.mjs
       - name: Verify macOS disk image and ZIP
         id: mac
         if: matrix.target == 'mac'
@@ -113,7 +139,8 @@ jobs:
         run: node scripts/smoke-desktop.mjs
         timeout-minutes: 5
         env:
-          NIUMA_SMOKE_EXECUTABLE: ${{ steps.mac.outputs.executable || 'release/win-unpacked/牛马鼓励器.exe' }}
+          NIUMA_SMOKE_EXECUTABLE: ${{ steps.mac.outputs.executable || steps.win.outputs.executable }}
+          NIUMA_WINDOWS_NATIVE_INPUT: ${{ matrix.target == 'win' && '1' || '' }}
           NIUMA_SMOKE_DATA_ROOT: ${{ runner.temp }}/niuma-smoke
       - name: Save native window evidence
         if: always()
@@ -125,6 +152,7 @@ jobs:
             artifacts/native-main.png
             artifacts/native-widget.png
             artifacts/native-error.png
+            artifacts/windows-baseline-result.json
           if-no-files-found: ignore
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
