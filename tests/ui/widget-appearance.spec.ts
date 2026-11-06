@@ -11,15 +11,21 @@ async function savedAppearance(page: Page) {
   return page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? 'null'), appearanceKey);
 }
 
-// Native color pickers cannot be driven consistently across headless browser platforms.
-// Dispatch the same input/change events after assigning through the native DOM setter.
-async function chooseColor(input: Locator, color: string) {
-  await input.evaluate((node, value) => {
-    const field = node as HTMLInputElement;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field, value);
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-    field.dispatchEvent(new Event('change', { bubbles: true }));
-  }, color);
+async function colorInput(dialog: Locator) {
+  await dialog.getByRole('button', { name: '自定义底色', exact: true }).click();
+  return dialog.getByLabel('浮窗底色', { exact: true });
+}
+
+async function chooseColor(dialog: Locator, color: string) {
+  const input = await colorInput(dialog);
+  await input.fill(color);
+  await input.press('Enter');
+  await dialog.getByRole('button', { name: '完成选色', exact: true }).click();
+}
+
+async function expectColor(dialog: Locator, color: string) {
+  await expect(await colorInput(dialog)).toHaveValue(color);
+  await dialog.getByRole('button', { name: '完成选色', exact: true }).click();
 }
 
 test('widget settings change the rendered size and tint, survive reload and reset to defaults', async ({ page }) => {
@@ -38,10 +44,9 @@ test('widget settings change the rendered size and tint, survive reload and rese
   const dialog = page.getByRole('dialog', { name: '浮窗设置', exact: true });
   const size = dialog.getByLabel('浮窗大小', { exact: true });
   const opacity = dialog.getByLabel('底色不透明度', { exact: true });
-  const tint = dialog.getByLabel('浮窗底色', { exact: true });
   await size.press('End');
   await expect(size).toHaveValue('150');
-  await chooseColor(tint, '#cce7fa');
+  await chooseColor(dialog, '#cce7fa');
   await opacity.press('End');
   await expect.poll(() => savedAppearance(page)).toEqual({ scale: 1.5, tint: '#cce7fa', opacity: 1 });
   await dialog.getByRole('button', { name: '返回浮窗', exact: true }).click();
@@ -56,9 +61,9 @@ test('widget settings change the rendered size and tint, survive reload and rese
   await page.reload();
   await widget.getByRole('button', { name: '浮窗设置', exact: true }).click();
   await expect(size).toHaveValue('150');
-  await expect(tint).toHaveValue('#cce7fa');
+  await expectColor(dialog, '#cce7fa');
   await expect(opacity).toHaveValue('100');
-  await chooseColor(tint, '#000000');
+  await chooseColor(dialog, '#000000');
   await expect.poll(() => savedAppearance(page)).toEqual({ scale: 1.5, tint: '#000000', opacity: 1 });
   await dialog.getByRole('button', { name: '返回浮窗', exact: true }).click();
   const gear = widget.getByRole('button', { name: '浮窗设置', exact: true });
@@ -69,7 +74,7 @@ test('widget settings change the rendered size and tint, survive reload and rese
   await dialog.getByRole('button', { name: '恢复默认', exact: true }).click();
   await expect.poll(() => savedAppearance(page)).toEqual(defaults);
   await expect(size).toHaveValue('100');
-  await expect(tint).toHaveValue(defaults.tint);
+  await expectColor(dialog, defaults.tint);
   await expect(opacity).toHaveValue('36');
   await dialog.getByRole('button', { name: '返回浮窗', exact: true }).click();
   expect((await widget.boundingBox())!.width).toBeCloseTo(before.width, 0);
@@ -87,11 +92,11 @@ test('consecutive appearance edits in one event loop preserve both the chosen ti
     opacity.dispatchEvent(new Event('change', { bubbles: true }));
   });
   await expect.poll(() => savedAppearance(page)).toEqual({ ...defaults, tint: '#e1d9f3', opacity: .78 });
-  await expect(dialog.getByLabel('浮窗底色', { exact: true })).toHaveValue('#e1d9f3');
+  await expectColor(dialog, '#e1d9f3');
   await expect(dialog.getByLabel('底色不透明度', { exact: true })).toHaveValue('78');
   await page.reload();
   await page.getByRole('button', { name: '浮窗设置', exact: true }).click();
-  await expect(dialog.getByLabel('浮窗底色', { exact: true })).toHaveValue('#e1d9f3');
+  await expectColor(dialog, '#e1d9f3');
   await expect(dialog.getByLabel('底色不透明度', { exact: true })).toHaveValue('78');
 });
 
@@ -106,7 +111,7 @@ test('settings stay usable at scale limits and Escape restores focus to the gear
   const size = dialog.getByLabel('浮窗大小', { exact: true });
   for (const key of ['Home', 'End']) {
     await size.press(key);
-    for (const control of [size, dialog.getByLabel('浮窗底色', { exact: true }), dialog.getByLabel('底色不透明度', { exact: true }), dialog.getByRole('button', { name: '返回浮窗', exact: true })]) {
+    for (const control of [size, dialog.getByRole('button', { name: '自定义底色', exact: true }), dialog.getByLabel('底色不透明度', { exact: true }), dialog.getByRole('button', { name: '返回浮窗', exact: true })]) {
       await expect(control).toBeVisible();
       const bounds = (await control.boundingBox())!;
       expect(bounds.x).toBeGreaterThanOrEqual(0);
@@ -118,6 +123,79 @@ test('settings stay usable at scale limits and Escape restores focus to the gear
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(gear).toBeFocused();
+});
+
+test('the full color wheel supports pointer dragging, keyboard selection and validated hex input', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(pathToFileURL(previewFile).href);
+  await page.getByRole('button', { name: '浮窗设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '浮窗设置', exact: true });
+  const hex = await colorInput(dialog);
+  const wheel = dialog.getByRole('slider', { name: '全色色轮', exact: true });
+  await hex.fill('#ff0000');
+  await hex.press('Enter');
+  await expect.poll(async () => (await savedAppearance(page))?.tint).toBe('#ff0000');
+  const bounds = (await wheel.boundingBox())!;
+  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  await page.mouse.move(center.x + bounds.width * .3, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x, center.y - bounds.height * .4, { steps: 5 });
+  await page.mouse.up();
+  const dragged = await hex.inputValue();
+  expect(dragged).toMatch(/^#[0-9a-f]{6}$/);
+  expect(dragged).not.toBe('#ff0000');
+  await expect.poll(async () => (await savedAppearance(page))?.tint).toBe(dragged);
+
+  await wheel.focus();
+  await page.keyboard.press('ArrowRight');
+  const byKey = await hex.inputValue();
+  expect(byKey).not.toBe(dragged);
+  await expect.poll(async () => (await savedAppearance(page))?.tint).toBe(byKey);
+  await page.keyboard.press('ArrowDown');
+  await expect(hex).not.toHaveValue(byKey);
+
+  await hex.fill('#336699');
+  await hex.press('Enter');
+  await expect.poll(async () => (await savedAppearance(page))?.tint).toBe('#336699');
+  await hex.fill('#zzzzzz');
+  await hex.press('Enter');
+  expect((await savedAppearance(page)).tint).toBe('#336699');
+  await hex.fill('#336699');
+  await hex.press('Enter');
+  await dialog.getByRole('button', { name: '完成选色', exact: true }).click();
+  await expect(wheel).toHaveCount(0);
+  await page.reload();
+  await page.getByRole('button', { name: '浮窗设置', exact: true }).click();
+  await expectColor(dialog, '#336699');
+});
+
+test('brightness and white-center selection preserve a usable color after black and white', async ({ page }) => {
+  await page.goto(pathToFileURL(previewFile).href);
+  await page.getByRole('button', { name: '浮窗设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '浮窗设置', exact: true });
+  const hex = await colorInput(dialog);
+  const wheel = dialog.getByRole('slider', { name: '全色色轮', exact: true });
+  const brightness = dialog.getByLabel('颜色明暗', { exact: true });
+  await hex.fill('#7f3fd4');
+  await hex.press('Enter');
+  await brightness.press('Home');
+  await expect(hex).toHaveValue('#000000');
+  await expect.poll(async () => (await savedAppearance(page))?.tint).toBe('#000000');
+  await brightness.press('End');
+  const colorful = await hex.inputValue();
+  const [red, green, blue] = [1, 3, 5].map(index => parseInt(colorful.slice(index, index + 2), 16));
+  expect(blue).toBeGreaterThan(red + 30);
+  expect(red).toBeGreaterThan(green + 30);
+  await wheel.press('Home');
+  await expect(hex).toHaveValue('#ffffff');
+  await expect.poll(async () => (await savedAppearance(page))?.tint).toBe('#ffffff');
+  await wheel.press('End');
+  const restored = await hex.inputValue();
+  expect(restored).not.toBe('#ffffff');
+  expect(parseInt(restored.slice(5, 7), 16)).toBeGreaterThan(parseInt(restored.slice(1, 3), 16));
+  await expect.poll(async () => (await savedAppearance(page))?.tint).toBe(restored);
+  await dialog.getByRole('button', { name: '完成选色', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '自定义底色', exact: true })).toBeVisible();
 });
 
 test('desktop appearance reports a failed save without browser fallback and accepts a retry', async ({ page }) => {
