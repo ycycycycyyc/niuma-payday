@@ -2,12 +2,25 @@
 // Keep subpixel positions here even when the drawing layer rounds a frame.
 const CHASE_SPEED = 620;
 const RETURN_SPEED = 530;
-const PAW_STEP = 38;
+const SHORTEST_PAW_STEP = 4.5;
+const MAX_PAW_FRAMES_PER_SECOND = 16;
 const ARRIVAL_RADIUS = 1.3;
+const ACTION_POSES = ['stand', 'turn', 'crouch', 'sit', 'lift', 'paw', 'wag'];
 
-export function createDesktopPetMotion({ x, y, facing = 1 }) {
-  return { x, y, vx: 0, vy: 0, facing: facing < 0 ? -1 : 1,
-    stride: 0, frame: 0, pose: 'stand', arrived: false };
+export function normalizePetLaunchPose(value) {
+  if (!value || !Number.isInteger(value.frame) || !Number.isFinite(value.stepPhase)
+    || value.stepPhase < 0 || value.stepPhase >= 4 || !Number.isFinite(value.speed) || value.speed < 0) return undefined;
+  const { pose, frame, stepPhase, speed } = value;
+  const valid = pose === 'walk' ? frame === Math.floor(stepPhase)
+    : frame >= 0 && frame < ACTION_POSES.length && pose === ACTION_POSES[frame];
+  return valid ? { pose, frame, stepPhase, speed } : undefined;
+}
+
+export function createDesktopPetMotion({ x, y, facing = 1, launchPose }) {
+  const start = normalizePetLaunchPose(launchPose);
+  const direction = facing < 0 ? -1 : 1;
+  return { x, y, vx: direction * Math.min(CHASE_SPEED, start?.speed ?? 0), vy: 0, facing: direction,
+    stepPhase: start?.stepPhase ?? 0, frame: start?.frame ?? 0, pose: start?.pose ?? 'stand', arrived: false };
 }
 
 export function clampPetCenter(point, bounds, size) {
@@ -60,7 +73,8 @@ export function acrossDesktopGap(point, target, displayBounds) {
 }
 
 function settle(pet, point, pose) {
-  return { ...pet, x: point.x, y: point.y, vx: 0, vy: 0, pose, frame: 0, arrived: true };
+  const frame = pose === 'wag' ? 6 : 0;
+  return { ...pet, x: point.x, y: point.y, vx: 0, vy: 0, pose, frame, arrived: true };
 }
 
 function advance(pet, target, seconds, returning) {
@@ -83,10 +97,14 @@ function advance(pet, target, seconds, returning) {
   // the dog flicker under the mouse, particularly on a sudden short return.
   if (stepX * dx + stepY * dy >= distance * distance) return settle(pet, target, restPose);
 
-  const stride = (pet.stride + Math.hypot(stepX, stepY)) % (4 * PAW_STEP);
+  const travel = Math.hypot(stepX, stepY);
+  // At a ledge walking speed (48 px/s), this matches the original 7.5 px paw
+  // step. A faster run lengthens the stride without cycling the paws too fast.
+  const pawStep = SHORTEST_PAW_STEP + travel / seconds / MAX_PAW_FRAMES_PER_SECOND;
+  const stepPhase = (pet.stepPhase + travel / pawStep) % 4;
   return { x: pet.x + stepX, y: pet.y + stepY, vx, vy,
     facing: Math.abs(vx) > 14 ? Math.sign(vx) : pet.facing,
-    stride, frame: Math.floor(stride / PAW_STEP), pose: 'walk', arrived: false };
+    stepPhase, frame: Math.floor(stepPhase), pose: 'walk', arrived: false };
 }
 
 export function stepDesktopPetMotion(state, target, elapsedMs, { returning = false, reducedMotion = false } = {}) {

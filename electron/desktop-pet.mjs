@@ -4,9 +4,18 @@ import { petLaneHeight } from '../shared/widget-geometry.mjs';
 import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
 
 const BONE_SIZE = 28;
+const FIRST_PAINT_TIMEOUT = 5000;
 const intersects = (rect, x, y, size) => x < rect.x + rect.width && x + size > rect.x
   && y < rect.y + rect.height && y + size > rect.y;
 const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
+
+function hideSurface(surface) {
+  if (!surface.shown || surface.win.isDestroyed()) return;
+  surface.win.webContents.send('niuma:desktop-pet-frame', { dog: null, bone: null, sampleTime: performance.now() });
+  surface.win.hide();
+  surface.shown = false;
+  surface.lastFrame = '';
+}
 
 // A display-sized paint surface stays still while the dog runs. All input goes
 // through it, including at the dog's feet and at the bone under the cursor.
@@ -63,11 +72,36 @@ export class DesktopPet {
   }
 
   end(landing) {
-    if (!this.trip) return;
+    const trip = this.trip;
     this.trip = null;
-    for (const { win } of this.surfaces.values()) if (!win.isDestroyed()) win.destroy();
-    this.surfaces.clear();
-    this.publish({ phase: 'docked', ...landing });
+    trip?.cancelLaunch?.();
+    const widget = landing && this.getWidget();
+    const keep = widget && !widget.isDestroyed() ? screen.getDisplayMatching(widget.getBounds()).id : null;
+    for (const [id, surface] of this.surfaces) {
+      if (id === keep && !surface.win.isDestroyed()) hideSurface(surface);
+      else {
+        this.surfaces.delete(id);
+        if (!surface.win.isDestroyed()) surface.win.destroy();
+      }
+    }
+    if (trip) this.publish({ phase: 'docked', ...landing });
+  }
+
+  prewarm() {
+    const widget = this.getWidget();
+    if (this.trip || !widget || widget.isDestroyed()) return;
+    try {
+      const display = screen.getDisplayMatching(widget.getBounds());
+      for (const [id, surface] of this.surfaces) {
+        if (id === display.id) continue;
+        this.surfaces.delete(id);
+        if (!surface.win.isDestroyed()) surface.win.destroy();
+      }
+      // Load the local page and its sprite sheets; the native surface stays hidden until takeoff.
+      this.surface(display);
+    } catch (error) {
+      console.warn('Unable to prepare the desktop pet:', error.message);
+    }
   }
 
   home(widget, trip) {
@@ -88,6 +122,7 @@ export class DesktopPet {
     const trip = this.trip;
     if (trip) {
       if (typeof reducedMotion === 'boolean') trip.reduced = reducedMotion;
+      if (trip.idleCursor) trip.lastTime = performance.now();
       trip.idleCursor = null;
       if (!trip.ready) {
         if (!active) this.end();
@@ -119,18 +154,49 @@ export class DesktopPet {
 
   async launch(widget, trip, facing) {
     this.displays = screen.getAllDisplays();
-    const start = this.home(widget, trip);
-    const display = screen.getDisplayNearestPoint({ x: Math.round(start.x), y: Math.round(start.y) });
-    await this.surface(display).loading;
-    if (this.trip !== trip || widget !== this.getWidget() || widget.isDestroyed()) return;
-    // The original dog kept walking while the graphics page loaded.
-    const hit = this.getHit();
-    if (hit?.width) trip.dockX = hit.left + hit.width / 2;
-    trip.pet = createDesktopPetMotion({ ...this.home(widget, trip), facing: hit?.facing ?? facing });
-    trip.lastTime = performance.now();
-    trip.ready = true;
-    this.publish({ phase: 'chasing' });
-    this.tick(screen.getCursorScreenPoint());
+    const painted = Promise.withResolvers();
+    const timeout = setTimeout(() => painted.reject(new Error('桌面小狗未能及时显示，请再点一次骨头')), FIRST_PAINT_TIMEOUT);
+    trip.cancelLaunch = painted.resolve;
+    try {
+      while (this.trip === trip && this.getWidget() === widget && !widget.isDestroyed()) {
+        // While a cold surface loads, the dog keeps walking and the card can move or change zoom.
+        const hit = this.getHit();
+        const zoom = widget.webContents.getZoomFactor();
+        if (hit?.width) {
+          trip.dockX = hit.left + hit.width / 2;
+          trip.cssSize = hit.width;
+          trip.dockYFromCard = hit.top + hit.height / 2 - petLaneHeight(widget.getContentBounds().height / zoom);
+        }
+        const home = this.home(widget, trip);
+        const display = screen.getDisplayNearestPoint({ x: Math.round(home.x), y: Math.round(home.y) });
+        const surface = this.surface(display);
+        if (!surface.ready) {
+          await Promise.race([surface.loading, painted.promise]);
+          continue;
+        }
+        // A user can drag the dock past an edge. Start at its nearest visible point if the
+        // entire sprite is outside the work area, so a first paint can still be acknowledged.
+        const firstPosition = intersects(display.workArea, home.x - home.size / 2, home.y - home.size / 2, home.size)
+          ? home : clampPetCenter(home, display.workArea, home.size);
+        const pose = hit?.launchPose;
+        trip.pet = createDesktopPetMotion({ ...firstPosition, facing: hit?.facing ?? facing,
+          launchPose: pose && { ...pose, speed: pose.speed * zoom } });
+        trip.launchSurface = surface;
+        trip.confirmFirstFrame = painted.resolve;
+        this.paint(trip.pet, home.size, null, surface);
+        await painted.promise;
+        if (this.trip !== trip) return;
+        trip.lastTime = performance.now();
+        trip.ready = true;
+        this.publish({ phase: 'chasing' });
+        this.tick(screen.getCursorScreenPoint());
+        return;
+      }
+      if (this.trip === trip) this.end();
+    } finally {
+      clearTimeout(timeout);
+      trip.cancelLaunch = trip.confirmFirstFrame = trip.launchSurface = null;
+    }
   }
 
   surface(display) {
@@ -139,7 +205,7 @@ export class DesktopPet {
     const surface = createSurface(display.workArea, this.root, this.developmentURL);
     this.surfaces.set(display.id, surface);
     const failed = error => {
-      if (this.surfaces.get(display.id) !== surface || !this.trip) return;
+      if (this.surfaces.get(display.id) !== surface) return;
       console.warn('Unable to draw the desktop pet:', error.message);
       this.end();
     };
@@ -147,16 +213,27 @@ export class DesktopPet {
       surface.ready = true;
       if (this.trip) this.trip.idleCursor = null;
     }, error => {
-      // launch() propagates first-surface failures to the bone button.
-      if (this.trip?.ready) failed(error);
+      // The launching caller owns initial-load errors; a failed prewarm must be retriable.
+      if (!this.trip || this.trip.ready) failed(error);
+      else if (this.surfaces.get(display.id) === surface) {
+        this.surfaces.delete(display.id);
+        if (!surface.win.isDestroyed()) surface.win.destroy();
+      }
     });
-    surface.win.webContents.on('render-process-gone', (_event, details) => failed(new Error(details.reason)));
+    const contents = surface.win.webContents;
+    contents.ipc.on('niuma:desktop-pet-first-paint', event => {
+      if (this.trip?.launchSurface !== surface || !surface.shown || contents.isDestroyed()) return;
+      const mainFrame = contents.mainFrame;
+      if (event.processId === mainFrame.processId && event.frameId === mainFrame.routingId) this.trip.confirmFirstFrame?.();
+    });
+    contents.on('render-process-gone', (_event, details) => failed(new Error(details.reason)));
+    surface.win.on('closed', () => failed(new Error('桌面绘制窗口已关闭')));
     return surface;
   }
 
   displaysChanged() {
-    if (!this.trip) return;
-    this.trip.idleCursor = null;
+    if (!this.trip && !this.surfaces.size) return;
+    if (this.trip) this.trip.idleCursor = null;
     this.displays = screen.getAllDisplays();
     for (const [id, surface] of this.surfaces) {
       const display = this.displays.find(d => d.id === id);
@@ -166,6 +243,7 @@ export class DesktopPet {
       } else {
         this.surfaces.delete(id);
         surface.win.destroy();
+        if (this.trip?.launchSurface === surface) this.end();
       }
     }
   }
@@ -174,6 +252,8 @@ export class DesktopPet {
     const trip = this.trip;
     if (!trip?.ready) return;
     if (trip.idleCursor?.x === cursor.x && trip.idleCursor.y === cursor.y) return;
+    // Time spent standing beside the bone cannot count towards her first new stride.
+    if (trip.idleCursor) trip.lastTime = performance.now();
     trip.idleCursor = null;
     try {
       const widget = this.getWidget();
@@ -202,20 +282,16 @@ export class DesktopPet {
     }
   }
 
-  paint(pet, size, bone) {
+  paint(pet, size, bone, handoffSurface = null) {
     const left = pet.x - size / 2, top = pet.y - size / 2;
+    const sampleTime = performance.now();
     for (const display of this.displays) {
       const area = display.workArea;
       const dogHere = intersects(area, left, top, size);
       const boneHere = bone && intersects(area, bone.x, bone.y, BONE_SIZE);
       if (!dogHere && !boneHere) {
         const idle = this.surfaces.get(display.id);
-        if (idle?.shown) {
-          idle.win.webContents.send('niuma:desktop-pet-frame', { dog: null, bone: null });
-          idle.win.hide();
-          idle.shown = false;
-          idle.lastFrame = '';
-        }
+        if (idle) hideSurface(idle);
         continue;
       }
       const surface = this.surface(display);
@@ -223,12 +299,14 @@ export class DesktopPet {
       const { win } = surface;
       const bounds = win.getContentBounds();
       const frame = {
-        dog: dogHere ? { x: left - bounds.x, y: top - bounds.y, size, facing: pet.facing, pose: pet.pose, frame: pet.frame } : null,
+        dog: dogHere ? { x: left - bounds.x, y: top - bounds.y, size, facing: pet.facing, pose: pet.pose, frame: pet.frame,
+          vx: pet.vx, vy: pet.vy } : null,
         bone: boneHere ? { x: bone.x - bounds.x, y: bone.y - bounds.y } : null,
+        ...(surface === handoffSurface ? { handoff: true } : {}),
       };
       const key = JSON.stringify(frame);
       if (key !== surface.lastFrame) {
-        win.webContents.send('niuma:desktop-pet-frame', frame);
+        win.webContents.send('niuma:desktop-pet-frame', { ...frame, sampleTime });
         surface.lastFrame = key;
       }
       if (!surface.shown) { win.showInactive(); surface.shown = true; }

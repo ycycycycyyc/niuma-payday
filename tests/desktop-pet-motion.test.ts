@@ -1,6 +1,46 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
+import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, normalizePetLaunchPose, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
+
+test('takeoff starts on the exact ledge sprite frame and retains the fractional step and sideways velocity', () => {
+  const origin = { x: 110, y: 40, facing: -1 };
+  const launchPose = { pose: 'walk', frame: 2, stepPhase: 2.65, speed: 48 };
+  const pet = createDesktopPetMotion({ ...origin, launchPose });
+  assert.deepEqual([pet.x, pet.y, pet.pose, pet.frame, pet.stepPhase, pet.vx], [110, 40, 'walk', 2, 2.65, -48]);
+  const next = stepDesktopPetMotion(pet, { x: -300, y: 40 }, 8);
+  assert.equal(next.frame, 2);
+  assert.ok(next.stepPhase > 2.65 && next.x < 110);
+
+  for (const [frame, pose] of ['stand', 'turn', 'crouch', 'sit', 'lift', 'paw', 'wag'].entries()) {
+    const action = createDesktopPetMotion({ ...origin, launchPose: { ...launchPose, frame, pose, speed: 0 } });
+    assert.deepEqual([action.pose, action.frame, action.stepPhase], [pose, frame, 2.65]);
+  }
+  for (const invalid of [undefined, { ...launchPose, frame: 3 }, { ...launchPose, stepPhase: NaN },
+    { ...launchPose, pose: 'paw' }, { ...launchPose, speed: Infinity }]) {
+    assert.equal(normalizePetLaunchPose(invalid), undefined);
+  }
+});
+
+test('a short chase shows steps near takeoff and a long chase limits the paw cadence', () => {
+  let pet = createDesktopPetMotion({ x: 0, y: 0 });
+  const frames = new Set<number>();
+  for (let t = 0; t < 600; t += 8) {
+    pet = stepDesktopPetMotion(pet, { x: 35, y: 0 }, 8);
+    if (pet.pose === 'walk') frames.add(pet.frame);
+    if (t === 128) assert.ok(frames.size >= 2, 'the paws already changed near the card');
+  }
+  assert.deepEqual(frames, new Set([0, 1, 2, 3]));
+  assert.equal(pet.pose, 'wag');
+
+  pet = createDesktopPetMotion({ x: 0, y: 0 });
+  let steps = 0;
+  for (let i = 0; i < 125; i++) {
+    const next = stepDesktopPetMotion(pet, { x: 5000, y: 0 }, 8);
+    steps += (next.stepPhase - pet.stepPhase + 4) % 4;
+    pet = next;
+  }
+  assert.ok(steps > 12 && steps <= 16, 'the running cycle stays legible for a full second');
+});
 
 test('the pet accelerates into a diagonal desktop chase, reaches the bone and settles without overshooting', () => {
   const origin = { x: -880, y: -210 };

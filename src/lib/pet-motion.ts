@@ -1,4 +1,5 @@
 export type PetPose = 'walk' | 'turn' | 'crouch' | 'sit' | 'lift' | 'paw' | 'wag' | 'stand';
+export type PetLaunchPose = { pose: PetPose; frame: number; stepPhase: number; speed: number };
 type Facing = 1 | -1;
 type Turn = { origin: number; tip: number; from: Facing; elapsedMs: number };
 
@@ -8,7 +9,7 @@ export interface PetMotionState {
   pose: PetPose;
   frame: number;
   speed: number;
-  stride: number;
+  stepPhase: number;
   turn: Turn | null;
   handshakeMs: number | null;
 }
@@ -35,7 +36,7 @@ const opposite = (facing: Facing): Facing => facing === 1 ? -1 : 1;
 export function createPetMotion(x = 0): PetMotionState {
   return {
     x: Number.isFinite(x) ? Math.max(0, x) : 0,
-    facing: 1, pose: 'stand', frame: 0, speed: 0, stride: 0, turn: null, handshakeMs: null,
+    facing: 1, pose: 'stand', frame: 0, speed: 0, stepPhase: 0, turn: null, handshakeMs: null,
   };
 }
 
@@ -62,10 +63,10 @@ function standStill(state: PetMotionState, pose: PetPose) {
 }
 
 function placePaws(state: PetMotionState, x: number) {
-  state.stride = (state.stride + Math.abs(x - state.x)) % (4 * PAW_STEP);
+  state.stepPhase = (state.stepPhase + Math.abs(x - state.x) / PAW_STEP) % 4;
   state.x = x;
   state.pose = 'walk';
-  state.frame = Math.floor(state.stride / PAW_STEP);
+  state.frame = Math.floor(state.stepPhase);
 }
 
 function startTurn(state: PetMotionState, tip: number) {

@@ -6,7 +6,7 @@
 
 **Mac** 用户可以从苹果菜单打开「关于本机」。如果「芯片」显示 Apple M 系列，选择 `mac-arm64.dmg` 结尾的文件。如果「处理器」显示 Intel，选择 `mac-x64.dmg` 结尾的文件。打开 DMG，把「牛马鼓励器」拖进「应用程序」，然后从那里启动。更新前，先在菜单栏的小牛菜单中选择「退出」。[下载最新版 Mac 安装包](https://github.com/ycycycycyyc/niuma-payday/releases/latest)
 
-**Windows** 用户请先右键任务栏右下角的小牛图标，选择「退出」关掉旧版，再双击新版免安装程序。小牛图标可能收在「显示隐藏的图标」里。[下载 Windows x64 免安装版](https://github.com/ycycycycyyc/niuma-payday/releases/download/desktop-v1.3.0/Niuma-1.3.0-windows-x64-portable.exe)
+**Windows** 用户请先右键任务栏右下角的小牛图标，选择「退出」关掉旧版，再双击新版免安装程序。小牛图标可能收在「显示隐藏的图标」里。[下载 Windows x64 免安装版](https://github.com/ycycycycyyc/niuma-payday/releases/download/desktop-v1.3.1/Niuma-1.3.1-windows-x64-portable.exe)
 
 从源码运行：
 

@@ -9,6 +9,7 @@ import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
 import { fullWidgetHeight, petLaneHeight, widgetBoundsInWorkArea } from '../shared/widget-geometry.mjs';
 import { setWindowsWidgetLayer } from './windows-widget-layer.mjs';
 import { DesktopPet } from './desktop-pet.mjs';
+import { normalizePetLaunchPose } from '../shared/desktop-pet-motion.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const developmentURL = process.env.VITE_DEV_SERVER_URL;
@@ -256,6 +257,7 @@ function syncWidgetMouseRegion() {
 function startWidgetPointerTracking() {
   if (process.platform !== 'win32' && process.platform !== 'darwin') return;
   syncWidgetMouseRegion();
+  if (!lanePointerTimer) desktopPet.prewarm();
   // Native drag regions swallow DOM enter/leave events. Sample the OS cursor
   // only while visible and change the native hit test only on a lane crossing.
   lanePointerTimer ??= setInterval(syncWidgetMouseRegion, 24);
@@ -269,6 +271,7 @@ function refitWidget() {
 
 function saveWidgetPosition() {
   if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  if (lanePointerTimer) desktopPet.prewarm();
   desktopState.widgetPosition = widgetCardPosition();
   try { writeJSON(desktopPath(), desktopState); } catch (error) {
     console.warn('Unable to save widget position:', error.message);
@@ -570,7 +573,8 @@ function installIPC() {
       || width > widgetLayout.width || height > fullWidgetHeight) return;
     const chasing = state.chasing && widgetWindow.isVisible();
     const startedChasing = chasing && !widgetPet?.chasing;
-    widgetPet = { left, top, width, height, chasing, facing: state.facing === -1 ? -1 : 1 };
+    widgetPet = { left, top, width, height, chasing, facing: state.facing === -1 ? -1 : 1,
+      launchPose: normalizePetLaunchPose(state.launchPose) };
     if (startedChasing) {
       lastPetPointer = null;
       syncWidgetMouseRegion();

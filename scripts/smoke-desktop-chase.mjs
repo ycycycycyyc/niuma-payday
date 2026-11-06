@@ -38,7 +38,25 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
   await click(button('拿起骨头'));
   await expect(button('收起骨头')).toHaveAttribute('aria-pressed', 'true');
   await click(button('将浮窗置底'));
+  await expect.poll(() => widget.evaluate(async () => (await window.niuma.getDesktopPetState()).phase)).toBe('chasing');
+  const overlay = desktop.windows().find(p => p.url().endsWith('/pet.html'));
+  assert.ok(overlay, 'The desktop drawing surface is ready');
   await move(target);
+  const cadence = await overlay.evaluate(() => new Promise(resolve => {
+    const dog = document.getElementById('desktop-dog');
+    const samples = [];
+    function measure(time) {
+      const rect = dog.getBoundingClientRect();
+      samples.push({ time, x: rect.x, y: rect.y });
+      if (time - samples[0].time < 480) { requestAnimationFrame(measure); return; }
+      const moving = samples.slice(1).filter((s, i) => Math.hypot(s.x - samples[i].x, s.y - samples[i].y) > 0.1);
+      const gaps = moving.slice(1).map((s, i) => s.time - moving[i].time).sort((a, b) => a - b);
+      resolve({ moving: moving.length, refreshes: samples.length - 1, median: gaps[Math.floor(gaps.length / 2)] });
+    }
+    requestAnimationFrame(measure);
+  }));
+  assert.ok(cadence.moving >= 3 && cadence.moving >= cadence.refreshes * 0.75, JSON.stringify(cadence));
+  record(`the desktop dog advanced on ${cadence.moving}/${cadence.refreshes} display refreshes, median interval ${cadence.median.toFixed(1)} ms`);
   await expect.poll(async () => {
     const pet = await paintedPet(desktop);
     return pet?.top && pet.bone && Math.hypot(pet.x - target.x, pet.y - target.y) < 100;

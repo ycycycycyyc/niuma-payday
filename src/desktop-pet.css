@@ -9,6 +9,7 @@ html, body {
 }
 #desktop-dog, #desktop-bone { position: absolute; left: 0; top: 0; }
 #desktop-dog {
+  will-change: transform;
   background: url('./assets/widget-dog-actions.webp') no-repeat 0 center / 700% 100%;
 }
 #desktop-dog[data-pose="walk"] {

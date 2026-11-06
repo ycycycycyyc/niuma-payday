@@ -64,7 +64,7 @@ test('the widget adopts an active chase, accepts a tray recall, and shows just o
 
 test('the transparent desktop surface draws only the sprites included in its current frame', async ({ page }) => {
   await page.addInitScript(() => {
-    window.petOverlay = { onFrame(cb) {
+    window.petOverlay = { firstFramePainted() { window.dispatchEvent(new Event('painted')); }, onFrame(cb) {
       const forward = (event: Event) => cb((event as CustomEvent).detail);
       window.addEventListener('pet-frame', forward);
       return () => window.removeEventListener('pet-frame', forward);
@@ -76,7 +76,7 @@ test('the transparent desktop surface draws only the sprites included in its cur
   await expect(dog).toBeHidden();
   await expect(bone).toBeHidden();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
-    dog: { x: 620, y: 314, size: 76, facing: -1, frame: 3, pose: 'walk' }, bone: { x: 800, y: 550 },
+    sampleTime: performance.now(), dog: { x: 620, y: 314, size: 76, facing: -1, frame: 3, pose: 'walk', vx: 0, vy: 0 }, bone: { x: 800, y: 550 },
   } })));
   await expect(dog).toHaveAttribute('data-frame', '3');
   await expect(dog).toHaveCSS('pointer-events', 'none');
@@ -85,4 +85,41 @@ test('the transparent desktop surface draws only the sprites included in its cur
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: { dog: null, bone: null } })));
   await expect(dog).toBeHidden();
   await expect(bone).toBeHidden();
+});
+
+test('the first desktop pose is drawn before handoff and movement continues between native cursor samples', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame(listener) {
+        window.addEventListener('pet-frame', e => listener((e as CustomEvent).detail));
+        return () => {};
+      },
+      firstFramePainted() {
+        const dog = document.getElementById('desktop-dog')!;
+        document.body.dataset.handoff = dog.hidden ? 'hidden' : dog.dataset.pose;
+      },
+    };
+  });
+  await page.goto('/pet.html');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+    sampleTime: 0, handoff: true, dog: { x: 50, y: 100, size: 76, facing: 1, frame: 5, pose: 'paw', vx: 0, vy: 0 }, bone: null,
+  } })));
+  await expect(page.locator('body')).toHaveAttribute('data-handoff', 'paw');
+  await expect(page.locator('#desktop-dog')).toHaveAttribute('data-frame', '5');
+  // A stalled native sampler must still produce intermediate positions, then
+  // stop after a short, bounded extrapolation instead of drifting forever.
+  await page.clock.install({ time: new Date('2026-11-06T12:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-11-06T12:00:01Z'));
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+    sampleTime: 1000, dog: { x: 50, y: 100, size: 76, facing: 1, frame: 1, pose: 'walk', vx: 500, vy: 0 }, bone: null,
+  } })));
+  const x = async () => (await page.locator('#desktop-dog').boundingBox())!.x;
+  await page.clock.runFor(32);
+  const intermediate = await x();
+  await page.clock.runFor(80);
+  expect(intermediate).toBeGreaterThan(50);
+  expect(intermediate).toBeLessThan(await x());
+  expect(await x()).toBeCloseTo(64);
+  await page.clock.runFor(1000);
+  expect(await x()).toBeCloseTo(64);
 });

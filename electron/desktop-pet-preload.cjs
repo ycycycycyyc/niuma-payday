@@ -8,6 +8,7 @@ ipcRenderer.on('niuma:desktop-pet-frame', (_event, frame) => {
   for (const listener of listeners) listener(frame);
 });
 contextBridge.exposeInMainWorld('petOverlay', {
+  firstFramePainted: () => ipcRenderer.send('niuma:desktop-pet-first-paint'),
   onFrame(listener) {
     listeners.add(listener);
     if (latest) listener(latest);

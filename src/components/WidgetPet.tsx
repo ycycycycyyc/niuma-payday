@@ -50,18 +50,27 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
     let lastReport = -Infinity;
     let reportedX = NaN;
     let reportedFacing = 0;
+    let reportedPose = '';
+    let reportedFrame = -1;
 
     function wake() {
       if (!raf && !document.hidden) raf = requestAnimationFrame(draw);
     }
-    function syncHitArea(time: number, settling: boolean) {
-      if (!bridge || (!settling && time - lastReport < 32)) return;
-      const x = Math.round(motion.current.x);
-      if (x === reportedX && motion.current.facing === reportedFacing) return;
+    function syncHitArea(time: number, settling: boolean, frame: number) {
+      if (!bridge) return;
+      const pet = motion.current;
+      const x = Math.round(pet.x);
+      const samePose = pet.facing === reportedFacing && pet.pose === reportedPose && frame === reportedFrame;
+      if (samePose && (x === reportedX || (!settling && time - lastReport < 32))) return;
       const rect = dog.getBoundingClientRect();
-      bridge.setWidgetPet({ left: rect.left, top: rect.top, width: rect.width, height: rect.height, chasing, facing: motion.current.facing });
+      bridge.setWidgetPet({
+        left: rect.left, top: rect.top, width: rect.width, height: rect.height, chasing, facing: pet.facing,
+        launchPose: { pose: pet.pose, frame, stepPhase: pet.stepPhase, speed: pet.speed },
+      });
       reportedX = x;
-      reportedFacing = motion.current.facing;
+      reportedFacing = pet.facing;
+      reportedPose = pet.pose;
+      reportedFrame = frame;
       lastReport = time;
     }
     function draw(time: number) {
@@ -92,7 +101,7 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
         sprite.style.transform = `scaleX(${pet.facing})`;
       }
       const moving = !quiet.matches && trackLength >= 4 && !(chasing && pet.pose === 'wag');
-      syncHitArea(time, !moving);
+      syncHitArea(time, !moving, frame);
       if (pet.handshakeMs !== null || moving) {
         lastTime = time;
         wake();

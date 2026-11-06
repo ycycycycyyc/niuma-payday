@@ -1,6 +1,7 @@
 import { DEFAULT_SETTINGS, validateSettings, type SalarySettings } from './salary';
 import { normalizeCalendarCache, type CalendarCache } from '../../shared/calendar.mjs';
 import { isDesktopHost } from './desktop-error';
+import type { PetLaunchPose } from './pet-motion';
 
 export type AppState = { version: 2; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache };
 export type WidgetLayer = 'top' | 'bottom';
@@ -24,7 +25,10 @@ declare global {
       getDesktopPetState?(): Promise<DesktopPetState>;
       setDesktopPetMode?(mode: { active: boolean; reducedMotion: boolean }): Promise<DesktopPetState>;
       onDesktopPetState?(callback: (state: DesktopPetState) => void): () => void;
-      setWidgetPet?(state: { left: number; top: number; width: number; height: number; chasing: boolean; facing?: 1 | -1 }): void;
+      setWidgetPet?(state: {
+        left: number; top: number; width: number; height: number;
+        chasing: boolean; facing?: 1 | -1; launchPose?: PetLaunchPose;
+      }): void;
       onWidgetPointer?(callback: (point: { x: number; y: number }) => void): () => void;
       minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void>;
       onWindowState(callback: (state: { maximized: boolean }) => void): () => void;
