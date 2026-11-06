@@ -26,6 +26,7 @@
   touch-action: manipulation;
   transition: none;
 }
+.widget-dog[hidden] { display: none; }
 .widget-dog:focus, .widget-dog:focus-visible { outline: none; }
 .widget-dog:focus-visible::after {
   content: '';

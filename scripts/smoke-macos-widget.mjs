@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { expect } from '@playwright/test';
+import { verifyDesktopChase } from './smoke-desktop-chase.mjs';
 
 const run = promisify(execFile);
 const fixtures = fileURLToPath(new URL('../tests/macos/', import.meta.url));
@@ -35,7 +36,8 @@ export async function verifyMacWidget(desktop, widget, scratch, record) {
   await run('/usr/bin/xcrun', ['swiftc', path.join(fixtures, 'window-probe.swift'), '-o', tool], { timeout: 90000 });
   const previousPointer = await desktop.evaluate(({ screen }) => screen.getCursorScreenPoint());
   const win = await nativeWidget(desktop);
-  const cover = spawn(tool, ['cover', ...[win.x, win.y, win.width, win.height].map(String), reportFile], { stdio: 'inherit' });
+  const area = await desktop.evaluate(({ screen }, rect) => screen.getDisplayMatching(rect).workArea, win);
+  const cover = spawn(tool, ['cover', ...[area.x, area.y, area.width, area.height].map(String), reportFile], { stdio: 'inherit' });
   const readReceiver = async () => JSON.parse(await fs.readFile(reportFile, 'utf8'));
   const button = name => widget.getByRole('button', { name, exact: true });
   try {
@@ -63,22 +65,17 @@ export async function verifyMacWidget(desktop, widget, scratch, record) {
     assert.deepEqual(focus, { outline: 'none', keyboard: false });
     record('WindowServer click reaches the app behind transparent padding and the moving dog shakes paws without a pointer outline');
 
-    await macClick(desktop, button('拿起骨头'));
-    await expect(button('收起骨头')).toHaveAttribute('aria-pressed', 'true');
-    await expect(widget.locator('.pet-held-bone')).toBeVisible();
-    const centerX = () => dog.evaluate(el => el.getBoundingClientRect().left + el.offsetWidth / 2);
-    await pointer('move', { x: win.x + 45, y: win.y + 140 });
-    await expect.poll(centerX, { timeout: 8500 }).toBeLessThan(75);
-    await pointer('move', { x: win.x + win.width - 42, y: win.y + 140 });
-    await expect.poll(centerX, { timeout: 8500 }).toBeGreaterThan(win.width - 75);
-    await macClick(desktop, button('收起骨头'));
-    await expect(button('拿起骨头')).toHaveAttribute('aria-pressed', 'false');
-    await macClick(desktop, button('拿起骨头'));
-    await expect(button('收起骨头')).toHaveAttribute('aria-pressed', 'true');
-    await pointer('escape', previousPointer);
-    await expect(button('拿起骨头')).toHaveAttribute('aria-pressed', 'false');
-    record('WindowServer clicks toggle the bone, the dog follows the real cursor to both ends and Escape puts it away');
-
+    await verifyDesktopChase(desktop, widget, {
+      click: locator => macClick(desktop, locator),
+      move: p => pointer('move', p),
+      clickThrough: async p => {
+        const before = (await readReceiver()).clicks;
+        await pointer('click', p);
+        await expect.poll(async () => (await readReceiver()).clicks).toBe(before + 1);
+      },
+      stop: () => widget.evaluate(() => window.niuma.setDesktopPetMode({ active:false, reducedMotion:false })),
+      raise: () => widget.evaluate(() => window.niuma.setWidgetLayer('top')), record,
+    });
     await macClick(desktop, button('将浮窗置底'));
     await expect.poll(order).toBe('bottom');
     const before = (await readReceiver()).clicks;

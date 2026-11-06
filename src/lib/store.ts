@@ -4,6 +4,7 @@ import { isDesktopHost } from './desktop-error';
 
 export type AppState = { version: 2; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache };
 export type WidgetLayer = 'top' | 'bottom';
+export type DesktopPetState = { phase: 'docked' | 'chasing' | 'returning'; dockX?: number; facing?: 1 | -1 };
 export const DEFAULT_STATE: AppState = { version: 2, configured: false, settings: DEFAULT_SETTINGS, goal: { name: '今天的咖啡自由', amount: 25 }, privacy: false, calendar: {} };
 const KEY = 'niuma.payday.v2';
 
@@ -19,7 +20,10 @@ declare global {
       getWidgetLayer?(): Promise<WidgetLayer>;
       setWidgetLayer?(layer: WidgetLayer): Promise<WidgetLayer>;
       onWidgetLayerChanged?(callback: (layer: WidgetLayer) => void): () => void;
-      setWidgetPet?(state: { left: number; top: number; width: number; height: number; chasing: boolean }): void;
+      getDesktopPetState?(): Promise<DesktopPetState>;
+      setDesktopPetMode?(mode: { active: boolean; reducedMotion: boolean }): Promise<DesktopPetState>;
+      onDesktopPetState?(callback: (state: DesktopPetState) => void): () => void;
+      setWidgetPet?(state: { left: number; top: number; width: number; height: number; chasing: boolean; facing?: 1 | -1 }): void;
       onWidgetPointer?(callback: (point: { x: number; y: number }) => void): () => void;
       minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void>;
       onWindowState(callback: (state: { maximized: boolean }) => void): () => void;

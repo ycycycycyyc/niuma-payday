@@ -1,0 +1,25 @@
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  pointer-events: none;
+}
+#desktop-dog, #desktop-bone { position: absolute; left: 0; top: 0; }
+#desktop-dog {
+  background: url('./assets/widget-dog-actions.webp') no-repeat 0 center / 700% 100%;
+}
+#desktop-dog[data-pose="walk"] {
+  background-image: url('./assets/widget-dog-walk.webp');
+  background-size: 400% 100%;
+}
+#desktop-bone {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  filter: drop-shadow(0 1px 1px #674c394f);
+}
+#desktop-dog[hidden], #desktop-bone[hidden] { display: none; }

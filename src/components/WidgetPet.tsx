@@ -1,7 +1,8 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Bone } from 'lucide-react';
 import { createPetMotion, requestPetHandshake, stepPetMotion } from '../lib/pet-motion';
+import type { DesktopPetState } from '../lib/store';
 import actions from '../assets/widget-dog-actions.webp';
 import walk from '../assets/widget-dog-walk.webp';
 import './widget-pet.css';
@@ -12,22 +13,26 @@ type Props = {
   chasing: boolean;
   setChasing: (active: boolean) => void;
   boneButton: RefObject<HTMLButtonElement | null>;
+  desktopState: DesktopPetState;
   preview: boolean;
 };
 
-export default function WidgetPet({ chasing, setChasing, boneButton, preview }: Props) {
+export default function WidgetPet({ chasing, setChasing, boneButton, desktopState, preview }: Props) {
   const laneRef = useRef<HTMLDivElement>(null);
   const dogRef = useRef<HTMLButtonElement>(null);
   const spriteRef = useRef<HTMLSpanElement>(null);
   const boneRef = useRef<HTMLSpanElement>(null);
   const motion = useRef(createPetMotion());
   const handshake = useRef<() => void>(() => {});
+  const { phase, dockX, facing } = desktopState;
 
   useEffect(() => {
     for (const src of [walk, actions]) { const image = new Image(); image.src = src; }
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // The desktop layer owns the sprite and mouse hit area until landing.
+    if (phase !== 'docked') return;
     const lane = laneRef.current!;
     const dog = dogRef.current!;
     const sprite = spriteRef.current!;
@@ -44,6 +49,7 @@ export default function WidgetPet({ chasing, setChasing, boneButton, preview }: 
     let lastTime: number | null = null;
     let lastReport = -Infinity;
     let reportedX = NaN;
+    let reportedFacing = 0;
 
     function wake() {
       if (!raf && !document.hidden) raf = requestAnimationFrame(draw);
@@ -51,10 +57,11 @@ export default function WidgetPet({ chasing, setChasing, boneButton, preview }: 
     function syncHitArea(time: number, settling: boolean) {
       if (!bridge || (!settling && time - lastReport < 32)) return;
       const x = Math.round(motion.current.x);
-      if (x === reportedX) return;
+      if (x === reportedX && motion.current.facing === reportedFacing) return;
       const rect = dog.getBoundingClientRect();
-      bridge.setWidgetPet({ left: rect.left, top: rect.top, width: rect.width, height: rect.height, chasing });
+      bridge.setWidgetPet({ left: rect.left, top: rect.top, width: rect.width, height: rect.height, chasing, facing: motion.current.facing });
       reportedX = x;
+      reportedFacing = motion.current.facing;
       lastReport = time;
     }
     function draw(time: number) {
@@ -116,9 +123,6 @@ export default function WidgetPet({ chasing, setChasing, boneButton, preview }: 
     }
     const onPointer = (e: PointerEvent) => movePointer({ x: e.clientX, y: e.clientY });
     const onPointerOut = (e: PointerEvent) => { if (!e.relatedTarget && bone) bone.hidden = true; };
-    const onKey = (e: KeyboardEvent) => {
-      if (chasing && e.key === 'Escape') { e.preventDefault(); setChasing(false); }
-    };
     function visibility() {
       cancelAnimationFrame(raf);
       raf = 0;
@@ -135,7 +139,6 @@ export default function WidgetPet({ chasing, setChasing, boneButton, preview }: 
     quiet.addEventListener('change', measure);
     let unsubscribe: (() => void) | undefined;
     if (chasing) {
-      document.addEventListener('keydown', onKey);
       // Native drag regions swallow DOM pointer moves; the widget supplies its local coordinates.
       if (bridge) unsubscribe = bridge.onWidgetPointer(movePointer);
       else {
@@ -146,22 +149,29 @@ export default function WidgetPet({ chasing, setChasing, boneButton, preview }: 
       if (button) movePointer({ x: button.left + button.width / 2, y: button.top + button.height / 2 });
     }
     measure();
+    if (dockX !== undefined) {
+      const x = Math.min(trackLength, Math.max(0, dockX - lane.getBoundingClientRect().left - inset - halfDog));
+      motion.current = createPetMotion(x);
+      if (facing) motion.current.facing = facing;
+    }
+    // Publish the starting footprint before the first possible toolbar click.
+    cancelAnimationFrame(raf);
+    draw(performance.now());
     return () => {
       cancelAnimationFrame(raf);
       resize.disconnect();
       quiet.removeEventListener('change', measure);
       document.removeEventListener('visibilitychange', visibility);
-      document.removeEventListener('keydown', onKey);
       window.removeEventListener('pointermove', onPointer, true);
       window.removeEventListener('pointerout', onPointerOut, true);
       unsubscribe?.();
       handshake.current = () => {};
     };
-  }, [chasing, setChasing, boneButton, preview]);
+  }, [chasing, setChasing, boneButton, preview, phase, dockX, facing]);
 
   return <>
-    <div className="widget-pet-lane" ref={laneRef}>
-      <button type="button" className="widget-dog" ref={dogRef} aria-label="和狗狗握手" title="和狗狗握手"
+    <div className="widget-pet-lane" ref={laneRef} data-pet-phase={phase}>
+      <button type="button" className="widget-dog" ref={dogRef} hidden={phase !== 'docked'} aria-label="和狗狗握手" title="和狗狗握手"
         onPointerDown={e => {
           if (!e.isPrimary || e.button !== 0) return;
           e.preventDefault();
