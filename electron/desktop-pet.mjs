@@ -5,6 +5,7 @@ import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, stepDesktopPe
 
 const BONE_SIZE = 28;
 const FIRST_PAINT_TIMEOUT = 5000;
+const COLD_SURFACE_MS = 250;
 const intersects = (rect, x, y, size) => x < rect.x + rect.width && x + size > rect.x
   && y < rect.y + rect.height && y + size > rect.y;
 const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
@@ -20,6 +21,7 @@ function hideSurface(surface) {
 // A display-sized paint surface stays still while the dog runs. All input goes
 // through it, including at the dog's feet and at the bone under the cursor.
 function createSurface(area, root, developmentURL) {
+  const createdAt = performance.now();
   const win = new BrowserWindow({
     ...area, title: '薪动 · 桌面小狗', frame: false, show: false, transparent: true,
     backgroundColor: '#00000000', roundedCorners: false, hasShadow: false,
@@ -48,7 +50,7 @@ function createSurface(area, root, developmentURL) {
     const loading = developmentURL
       ? win.loadURL(new URL('/pet.html', developmentURL).href)
       : win.loadFile(path.join(root, 'dist', 'pet.html'));
-    return { win, loading, ready: false, shown: false, lastFrame: '' };
+    return { win, loading, createdAt, ready: false, prepared: false, shown: false, lastFrame: '' };
   } catch (error) {
     win.destroy();
     throw error;
@@ -154,6 +156,7 @@ export class DesktopPet {
 
   async launch(widget, trip, facing) {
     this.displays = screen.getAllDisplays();
+    const requestedAt = performance.now();
     const painted = Promise.withResolvers();
     const timeout = setTimeout(() => painted.reject(new Error('桌面小狗未能及时显示，请再点一次骨头')), FIRST_PAINT_TIMEOUT);
     trip.cancelLaunch = painted.resolve;
@@ -170,8 +173,22 @@ export class DesktopPet {
         const home = this.home(widget, trip);
         const display = screen.getDisplayNearestPoint({ x: Math.round(home.x), y: Math.round(home.y) });
         const surface = this.surface(display);
-        if (!surface.ready) {
-          await Promise.race([surface.loading, painted.promise]);
+        if (!surface.prepared && (!surface.ready || requestedAt - surface.createdAt < COLD_SURFACE_MS)) {
+          // Starting the native compositor can delay both windows. Keep the card's dog
+          // in charge while the empty click-through surface receives its first stable refreshes.
+          trip.launchSurface = surface;
+          surface.win.showInactive();
+          surface.shown = true;
+          if (!surface.ready) await Promise.race([surface.loading, painted.promise]);
+          if (this.trip !== trip) return;
+          const prepared = Promise.withResolvers();
+          trip.confirmPrepared = prepared.resolve;
+          surface.win.webContents.send('niuma:desktop-pet-prepare');
+          await Promise.race([prepared.promise, painted.promise]);
+          if (this.trip !== trip) return;
+          trip.confirmPrepared = null;
+          surface.prepared = true;
+          // Re-read the latest dock coordinates and pose, including any move to another display.
           continue;
         }
         // A user can drag the dock past an edge. Start at its nearest visible point if the
@@ -195,7 +212,8 @@ export class DesktopPet {
       if (this.trip === trip) this.end();
     } finally {
       clearTimeout(timeout);
-      trip.cancelLaunch = trip.confirmFirstFrame = trip.launchSurface = null;
+      trip.confirmPrepared?.();
+      trip.cancelLaunch = trip.confirmPrepared = trip.confirmFirstFrame = trip.launchSurface = null;
     }
   }
 
@@ -221,10 +239,16 @@ export class DesktopPet {
       }
     });
     const contents = surface.win.webContents;
-    contents.ipc.on('niuma:desktop-pet-first-paint', event => {
-      if (this.trip?.launchSurface !== surface || !surface.shown || contents.isDestroyed()) return;
+    const fromLaunchSurface = event => {
+      if (this.trip?.launchSurface !== surface || !surface.shown || contents.isDestroyed()) return false;
       const mainFrame = contents.mainFrame;
-      if (event.processId === mainFrame.processId && event.frameId === mainFrame.routingId) this.trip.confirmFirstFrame?.();
+      return event.processId === mainFrame.processId && event.frameId === mainFrame.routingId;
+    };
+    contents.ipc.on('niuma:desktop-pet-surface-ready', event => {
+      if (fromLaunchSurface(event)) this.trip.confirmPrepared?.();
+    });
+    contents.ipc.on('niuma:desktop-pet-first-paint', event => {
+      if (fromLaunchSurface(event)) this.trip.confirmFirstFrame?.();
     });
     contents.on('render-process-gone', (_event, details) => failed(new Error(details.reason)));
     surface.win.on('closed', () => failed(new Error('桌面绘制窗口已关闭')));

@@ -90,13 +90,14 @@ async function verifyDesktop() {
   record('unowned about:blank window cannot invoke protected state IPC');
   await main.screenshot({ path: path.join(artifacts, 'native-main.png'), fullPage: false });
 
-  const newWidget = desktop.waitForEvent('window', { predicate: page => page !== main, timeout: 15_000 });
+  const readMainWindow = async () => (await windows()).find(win => win.url === main.url());
   await main.getByRole('button', { name: '开启悬浮窗', exact: true }).click();
-  const widget = await newWidget;
+  await expect.poll(() => desktop.windows().some(page => page.url().endsWith('#/widget'))).toBe(true);
+  const widget = desktop.windows().find(page => page.url().endsWith('#/widget'));
   widget.on('pageerror', error => failures.push(error.message));
   await expect(widget.getByLabel('工资悬浮窗')).toBeVisible({ timeout: 15_000 });
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(true);
-  await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.minimized).toBe(true);
+  await expect.poll(async () => (await readMainWindow())?.minimized).toBe(true);
   const initialWindows = await windows();
   const widgetState = initialWindows.find(window => window.url.endsWith('#/widget'));
   assert.equal(widgetState.alwaysOnTop, true);
@@ -173,7 +174,7 @@ async function verifyDesktop() {
   record('native widget eye button hides and restores earnings in both windows, preserves the timer and saves privacy');
   await clickWidgetControl('返回主窗口');
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
-  await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.minimized).toBe(false);
+  await expect.poll(async () => (await readMainWindow())?.minimized).toBe(false);
   await main.getByRole('button', { name: '隐藏金额', exact: true }).click();
   await expect(main.locator('.earnings-card .live-amount')).toHaveAttribute('aria-label', '金额已隐藏');
   await expect(widget.locator('.live-amount')).toHaveAttribute('aria-label', '金额已隐藏');
@@ -196,14 +197,14 @@ async function verifyDesktop() {
       return true;
     });
     assert.equal(invoked, true);
-    await expect.poll(async () => (await windows()).find(win => !win.url.endsWith('#/widget'))?.minimized).toBe(false);
+    await expect.poll(async () => (await readMainWindow())?.minimized).toBe(false);
     assert.equal(await desktop.evaluate(({ app }) => app.dock.isVisible()), true);
     record('native macOS Window menu command restores the main window with its Dock icon');
   } else {
     await main.evaluate(() => window.niuma.restoreMain());
   }
   await main.getByRole('button', { name: '收起到托盘', exact: true }).click();
-  await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.visible).toBe(false);
+  await expect.poll(async () => (await readMainWindow())?.visible).toBe(false);
   assert.equal(child.exitCode, null);
   assert.equal((await main.evaluate(() => window.niuma.getState())).settings.dailySalary, 680);
   record('widget hide works; closing main keeps application running in tray');

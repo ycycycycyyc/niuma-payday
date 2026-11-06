@@ -94,6 +94,8 @@ test('the first desktop pose is drawn before handoff and movement continues betw
         window.addEventListener('pet-frame', e => listener((e as CustomEvent).detail));
         return () => {};
       },
+      onPrepare(listener) { window.addEventListener('prepare', listener); },
+      surfaceReady() { document.body.dataset.surface = 'ready'; },
       firstFramePainted() {
         const dog = document.getElementById('desktop-dog')!;
         document.body.dataset.handoff = dog.hidden ? 'hidden' : dog.dataset.pose;
@@ -101,6 +103,9 @@ test('the first desktop pose is drawn before handoff and movement continues betw
     };
   });
   await page.goto('/pet.html');
+  await page.evaluate(() => window.dispatchEvent(new Event('prepare')));
+  await expect(page.locator('body')).toHaveAttribute('data-surface', 'ready');
+  await expect(page.locator('#desktop-dog')).toBeHidden();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
     sampleTime: 0, handoff: true, dog: { x: 50, y: 100, size: 76, facing: 1, frame: 5, pose: 'paw', vx: 0, vy: 0 }, bone: null,
   } })));

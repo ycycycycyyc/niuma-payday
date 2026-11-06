@@ -13,6 +13,8 @@ declare global {
     petOverlay?: {
       onFrame(listener: (frame: Frame) => void): () => void;
       firstFramePainted(): void;
+      onPrepare(listener: () => void): void;
+      surfaceReady(): void;
     };
   }
 }
@@ -33,6 +35,24 @@ let samples: Sample[] = [];
 let clockOffset = 0;
 let raf = 0;
 let handoffSerial = 0;
+
+window.petOverlay?.onPrepare?.(() => {
+  // During the native window opening transition even an idle renderer can miss
+  // several consecutive refreshes. Keep the walking dog on the card until the
+  // new transparent surface has received a short stretch of regular paints.
+  let start: number | undefined;
+  let last: number | undefined;
+  const requestedAt = performance.now();
+  let refreshes = 0;
+  function check(time: number) {
+    refreshes++;
+    if (start === undefined || last === undefined || time - last > 55) start = time;
+    last = time;
+    if (time - start >= 72 || (refreshes >= 4 && time - requestedAt >= 500)) window.petOverlay?.surfaceReady();
+    else requestAnimationFrame(check);
+  }
+  void artworkReady.then(ready => { if (ready) requestAnimationFrame(check); });
+});
 
 function paint(dog: Dog, x: number, y: number) {
   if (sprite.dataset.pose !== dog.pose || sprite.dataset.frame !== String(dog.frame)) {
