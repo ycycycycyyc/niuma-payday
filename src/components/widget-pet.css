@@ -19,13 +19,27 @@
   padding: 0;
   border: 0;
   border-radius: 40%;
+  appearance: none;
   background: transparent;
   pointer-events: auto;
   -webkit-app-region: no-drag;
   touch-action: manipulation;
   transition: none;
 }
-.widget-dog:focus-visible { outline-offset: -4px; }
+.widget-dog:focus, .widget-dog:focus-visible { outline: none; }
+.widget-dog:focus-visible::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 5px;
+  background: #5a3b43;
+  border: 1px solid #fff7f1;
+  border-radius: 3px;
+  pointer-events: none;
+}
 .widget-dog .pet-sprite {
   display: block;
   width: 100%;

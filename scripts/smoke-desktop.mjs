@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect } from '@playwright/test';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
+import { macClick, verifyMacWidget } from './smoke-macos-widget.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
@@ -106,14 +107,18 @@ try {
   await widget.screenshot({ path: path.join(artifacts, 'native-widget.png'), fullPage: false });
   record(`manual floating widget is visible, always on top, with a ${widgetLayout.laneHeight} px pet lane and ${card.width}×${card.height} card; main minimized`);
 
-  const dog = widget.getByRole('button', { name: '和狗狗握手', exact: true });
-  const dogBox = await dog.boundingBox();
-  assert.ok(dogBox);
-  await widget.mouse.click(dogBox.x + dogBox.width / 2, dogBox.y + dogBox.height / 2);
-  await expect(dog).toHaveAttribute('data-pose', 'paw');
-  record('targeted pointer input in the native widget plays the seated handshake');
+  if (process.platform === 'darwin') {
+    await verifyMacWidget(desktop, widget, userData, record);
+  } else {
+    const dog = widget.getByRole('button', { name: '和狗狗握手', exact: true });
+    const dogBox = await dog.boundingBox();
+    assert.ok(dogBox);
+    await widget.mouse.click(dogBox.x + dogBox.width / 2, dogBox.y + dogBox.height / 2);
+    await expect(dog).toHaveAttribute('data-pose', 'paw');
+    record('targeted pointer input in the native widget plays the seated handshake');
+  }
 
-  if (process.platform === 'win32' || process.platform === 'darwin') {
+  if (process.platform === 'win32') {
     const originalCursor = await desktop.evaluateHandle(({ screen }) => screen.getCursorScreenPoint);
     try {
       // Only this isolated Electron process reads a fixture coordinate; the OS pointer never moves.
@@ -141,7 +146,12 @@ try {
     }
   }
 
-  await widget.getByRole('button', { name: '返回主窗口', exact: true }).click();
+  const clickWidgetControl = async name => {
+    const button = widget.getByRole('button', { name, exact: true });
+    if (process.platform === 'darwin') await macClick(desktop, button);
+    else await button.click();
+  };
+  await clickWidgetControl('返回主窗口');
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
   await expect.poll(async () => (await windows()).find(window => !window.url.endsWith('#/widget'))?.minimized).toBe(false);
   await main.getByRole('button', { name: '隐藏金额', exact: true }).click();
@@ -155,7 +165,7 @@ try {
 
   await main.evaluate(() => window.niuma.showWidget());
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(true);
-  await widget.getByRole('button', { name: '隐藏浮窗', exact: true }).click();
+  await clickWidgetControl('隐藏浮窗');
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
   if (process.platform === 'darwin') {
     const invoked = await desktop.evaluate(({ Menu }) => {

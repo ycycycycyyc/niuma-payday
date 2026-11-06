@@ -1,10 +1,10 @@
-import { ArrowUpRight, Bone, Clock3, GripHorizontal, X } from 'lucide-react';
-import { useId, useRef, useState, type CSSProperties } from 'react';
+import { ArrowDownToLine, ArrowUpToLine, ArrowUpRight, Bone, Clock3, GripHorizontal, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import layout from '../../shared/widget-layout.json';
 import lensMap from '../assets/widget-lens-displacement.png?inline';
 import { DEFAULT_SETTINGS, calculateSalary } from '../lib/salary';
 import { duration, useClock } from '../lib/clock';
-import type { AppState } from '../lib/store';
+import type { AppState, WidgetLayer } from '../lib/store';
 import LiveAmount from './LiveAmount';
 import Mascot from './Mascot';
 import WidgetPet from './WidgetPet';
@@ -35,6 +35,47 @@ function LensFilter({ id }: { id: string }) {
 export default function Widget({ state, onRestore, onHide, preview = false }: { state: AppState; onRestore: () => void; onHide: () => void; preview?: boolean }) {
   const [chasing, setChasing] = useState(false);
   const boneButton = useRef<HTMLButtonElement>(null);
+  const desktop = preview ? undefined : window.niuma;
+  const [layer, setLayer] = useState<WidgetLayer | null>(null);
+  const [changingLayer, setChangingLayer] = useState(false);
+  const [layerError, setLayerError] = useState(false);
+  const layerRevision = useRef(0);
+
+  useEffect(() => {
+    if (!desktop?.getWidgetLayer) return;
+    const revision = layerRevision.current;
+    const unsubscribe = desktop.onWidgetLayerChanged?.(value => {
+      layerRevision.current++;
+      setLayer(value);
+      setLayerError(false);
+    });
+    void desktop.getWidgetLayer().then(value => {
+      if (revision === layerRevision.current) setLayer(value);
+    }).catch(() => {
+      if (revision === layerRevision.current) setLayerError(true);
+    });
+    return () => { layerRevision.current++; unsubscribe?.(); };
+  }, [desktop]);
+
+  async function changeLayer() {
+    if (!desktop?.setWidgetLayer || !desktop.getWidgetLayer || changingLayer) return;
+    const revision = layerRevision.current;
+    setChangingLayer(true);
+    setLayerError(false);
+    try {
+      const value = layer === null
+        ? await desktop.getWidgetLayer()
+        : await desktop.setWidgetLayer(layer === 'top' ? 'bottom' : 'top');
+      // A later menu choice takes precedence over the reply to an earlier click.
+      if (revision === layerRevision.current) setLayer(value);
+    } catch {
+      if (revision === layerRevision.current) setLayerError(true);
+    } finally {
+      setChangingLayer(false);
+    }
+  }
+  const lowerLabel = desktop?.platform === 'darwin' ? '将浮窗置底' : '取消置顶';
+  const layerLabel = layer === null ? '读取浮窗层级' : layer === 'top' ? lowerLabel : '将浮窗置顶';
   const demo = !state.configured;
   const settings = demo ? DEFAULT_SETTINGS : state.settings;
   const now = useClock(demo);
@@ -51,12 +92,20 @@ export default function Widget({ state, onRestore, onHide, preview = false }: { 
     {hasLensFilter && <LensFilter id={lensId} />}
     <section className={`widget ${preview ? 'widget-preview' : ''}`} data-refraction={hasLensFilter ? 'svg' : 'fallback'} style={lensStyle} aria-label="工资悬浮窗">
       <div className="widget-head">
-        <span className="widget-status"><i className={result.status === 'working' ? 'active' : ''} />{demo ? '演示数据' : result.statusLabel}</span>
-        <GripHorizontal size={18} className="widget-grip" aria-hidden="true" />
+        <div className="widget-head-move">
+          {layerError ? <span className="widget-status" role="status">层级操作失败，可重试</span> :
+            <span className="widget-status"><i className={result.status === 'working' ? 'active' : ''} />{demo ? '演示数据' : result.statusLabel}</span>}
+          <GripHorizontal size={18} className="widget-grip" aria-hidden="true" />
+        </div>
         <div className="widget-actions">
           <button ref={boneButton} type="button" className="widget-bone-toggle" aria-pressed={chasing}
             aria-label={chasing ? '收起骨头' : '拿起骨头'} title={chasing ? '收起骨头（Esc）' : '拿起骨头，让她追着玩'}
             onClick={() => setChasing(held => !held)}><Bone size={17} aria-hidden="true" /></button>
+          {desktop?.setWidgetLayer && desktop.getWidgetLayer && <button type="button"
+            disabled={changingLayer || (layer === null && !layerError)} aria-label={layerLabel} title={layerLabel}
+            onClick={() => void changeLayer()}>
+            {layer === 'bottom' ? <ArrowUpToLine size={17} aria-hidden="true" /> : <ArrowDownToLine size={17} aria-hidden="true" />}
+          </button>}
           <button onClick={onRestore} aria-label="返回主窗口" title="返回主窗口"><ArrowUpRight size={18} /></button>
           <button onClick={onHide} aria-label="隐藏浮窗" title="隐藏浮窗"><X size={17} /></button>
         </div>

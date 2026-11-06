@@ -59,7 +59,6 @@ body.widget-body { min-width: 0; overflow: hidden; }
   box-shadow: var(--glass-edge-shadow);
   -webkit-backdrop-filter: blur(.6px) saturate(1.06);
   backdrop-filter: blur(.6px) saturate(1.06);
-  -webkit-app-region: drag;
 }
 .widget[data-refraction="svg"] { backdrop-filter: var(--widget-lens-filter); }
 .widget::before {
@@ -92,13 +91,16 @@ body.widget-body { min-width: 0; overflow: hidden; }
   -webkit-app-region: no-drag;
   box-shadow: var(--glass-edge-shadow), 0 3px 8px #693b5419, 0 14px 26px #542d4116;
 }
-.widget-head { position: relative; display: flex; align-items: center; justify-content: space-between; }
+.widget-head { position: relative; display: flex; align-items: stretch; gap: 8px; }
+.widget-head-move { display: flex; flex: 1; min-width: 0; align-items: center; }
+/* Cocoa receives distinct drag rectangles, none of which contains a control or the dog. */
+.widget-body :is(.widget-head-move, .widget-middle, .widget-foot, .widget-progress) { -webkit-app-region: drag; }
 .widget-status { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--glass-muted); }
 .widget-status, .widget-earnings-label, .widget .live-amount, .widget-foot { text-shadow: var(--glass-shadow); }
 .widget-status > i { width: 7px; height: 7px; border-radius: 50%; background: #a58295; }
 .widget-status > i.active { background: #aa5682; box-shadow: 0 0 0 3px #d88ead32; }
-.widget-grip { position: absolute; left: 50%; transform: translateX(-50%); color: var(--glass-muted); opacity: .74; }
-.widget-actions { display: flex; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
+.widget-grip { position: absolute; left: 50%; transform: translateX(-50%); color: var(--glass-muted); opacity: .74; pointer-events: none; }
+.widget-actions { display: flex; flex: none; align-items: center; gap: 6px; -webkit-app-region: no-drag; }
 .widget-actions button {
   display: grid; place-items: center; width: 30px; height: 29px; padding: 0;
   border: 1px solid var(--glass-button-edge); border-radius: 10px; color: var(--glass-ink);
@@ -107,6 +109,10 @@ body.widget-body { min-width: 0; overflow: hidden; }
 }
 .widget-actions button:hover { color: #58273f; border-color: #aa7290; background-color: var(--glass-pink); }
 .widget-actions button:focus-visible { outline: 2px solid #92476f; outline-offset: 2px; }
+@media (max-width: 335px) {
+  .widget-body .widget-grip { display: none; }
+  .widget-body .widget-actions { gap: 4px; }
+}
 .widget-middle { display: grid; grid-template-columns: minmax(0, 1fr) 85px; align-items: center; gap: 5px; min-width: 0; }
 .widget-earnings { min-width: 0; container-type: inline-size; }
 .widget-earnings-label { color: var(--glass-muted); font-size: 13px; font-weight: 600; }

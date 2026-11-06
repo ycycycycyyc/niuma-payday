@@ -120,6 +120,9 @@ function secureWindow(window, role) {
 
 function loadWindow(window, widget = false) {
   secureWindow(window, widget ? 'widget' : 'main');
+  window.webContents.on('did-finish-load', () => {
+    window.webContents.send('niuma:widget-layer-changed', getWidgetLayer());
+  });
   if (developmentURL) {
     return window.loadURL(`${developmentURL.replace(/\/$/, '')}/${widget ? '#/widget' : ''}`);
   }
@@ -255,6 +258,40 @@ function saveWidgetPosition() {
   }
 }
 
+function getWidgetLayer() {
+  return desktopState.widgetLayer === 'bottom' ? 'bottom' : 'top';
+}
+
+function applyWidgetLayer(layer) {
+  if (layer === 'top') {
+    widgetWindow.setAlwaysOnTop(true, 'floating');
+  } else if (process.platform === 'darwin') {
+    // On macOS false always resets to level 0. The relative offset needs the true form.
+    widgetWindow.setAlwaysOnTop(true, 'normal', -1);
+  } else {
+    widgetWindow.setAlwaysOnTop(false);
+  }
+}
+
+function setWidgetLayer(layer) {
+  if (layer !== 'top' && layer !== 'bottom') throw new Error('未知的浮窗层级');
+  if (layer === getWidgetLayer()) return layer;
+  if (widgetWindow && !widgetWindow.isDestroyed()) applyWidgetLayer(layer);
+  desktopState.widgetLayer = layer;
+  try { writeJSON(desktopPath(), desktopState); } catch (error) {
+    console.warn('Unable to save widget layer:', error.message);
+  }
+  for (const window of [mainWindow, widgetWindow]) {
+    if (window && !window.isDestroyed()) window.webContents.send('niuma:widget-layer-changed', layer);
+  }
+  return layer;
+}
+
+function bringWidgetToTop() {
+  setWidgetLayer('top');
+  return showWidget().catch(() => {});
+}
+
 async function createWidget() {
   widgetWindow = new BrowserWindow({
     ...fitWidgetBounds(desktopState.widgetPosition),
@@ -271,14 +308,13 @@ async function createWidget() {
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
-    alwaysOnTop: true,
     skipTaskbar: true,
     hasShadow: false,
     title: '薪动 · 工资浮窗',
     icon: appIcon,
     webPreferences: { ...webPreferences, backgroundThrottling: true },
   });
-  widgetWindow.setAlwaysOnTop(true, 'floating');
+  applyWidgetLayer(getWidgetLayer());
   widgetWindow.on('move', () => {
     clearTimeout(positionTimer);
     positionTimer = setTimeout(saveWidgetPosition, 300);
@@ -453,6 +489,7 @@ function createTray() {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '打开牛马鼓励器', click: restoreMain },
       { label: '显示工资浮窗', click: () => { void showWidget().catch(() => {}); } },
+      { label: '将浮窗置顶', click: bringWidgetToTop },
       { label: '隐藏工资浮窗', click: () => hideWidget() },
       { type: 'separator' },
       { label: '退出', click: () => app.quit() },
@@ -488,6 +525,8 @@ function installIPC() {
     return callback(...args);
   });
   handle('niuma:get-state', () => appState);
+  handle('niuma:get-widget-layer', getWidgetLayer);
+  handle('niuma:set-widget-layer', setWidgetLayer);
   handle('niuma:set-state', (value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Settings must be an object.');
     const serialized = JSON.stringify(value);
@@ -553,7 +592,7 @@ if (!app.requestSingleInstanceLock()) {
       Menu.setApplicationMenu(Menu.buildFromTemplate([
         { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
         { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
-        { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { label: '返回主窗口', click: restoreMain }] },
+        { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { label: '将浮窗置顶', click: bringWidgetToTop }, { label: '返回主窗口', click: restoreMain }] },
       ]));
     } else Menu.setApplicationMenu(null);
     createMainWindow();

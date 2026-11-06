@@ -3,6 +3,7 @@ import { normalizeCalendarCache, type CalendarCache } from '../../shared/calenda
 import { isDesktopHost } from './desktop-error';
 
 export type AppState = { version: 2; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache };
+export type WidgetLayer = 'top' | 'bottom';
 export const DEFAULT_STATE: AppState = { version: 2, configured: false, settings: DEFAULT_SETTINGS, goal: { name: '今天的咖啡自由', amount: 25 }, privacy: false, calendar: {} };
 const KEY = 'niuma.payday.v2';
 
@@ -15,6 +16,9 @@ declare global {
       onStateChanged(callback: (state: unknown) => void): () => void;
       refreshCalendar(): Promise<{ status: string; message: string; calendar: CalendarCache }>;
       showWidget(): Promise<void>; hideWidget(): Promise<void>; restoreMain(): Promise<void>;
+      getWidgetLayer?(): Promise<WidgetLayer>;
+      setWidgetLayer?(layer: WidgetLayer): Promise<WidgetLayer>;
+      onWidgetLayerChanged?(callback: (layer: WidgetLayer) => void): () => void;
       setWidgetPet?(state: { left: number; top: number; width: number; height: number; chasing: boolean }): void;
       onWidgetPointer?(callback: (point: { x: number; y: number }) => void): () => void;
       minimize(): Promise<void>; maximize(): Promise<void>; close(): Promise<void>;

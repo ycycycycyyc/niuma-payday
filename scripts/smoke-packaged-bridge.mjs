@@ -70,9 +70,11 @@ const app = Object.assign(new EventEmitter(), {
 });
 const ipcMain = Object.assign(new EventEmitter(), { handle: (channel, handler) => handlers.set(channel, handler) });
 
+let trayMenu;
+let applicationMenu;
 class Tray extends EventEmitter {
   setToolTip() {}
-  setContextMenu() {}
+  setContextMenu(menu) { trayMenu = menu; }
   destroy() {}
 }
 
@@ -162,7 +164,7 @@ class BrowserWindow extends EventEmitter {
         assert.equal(name, 'electron');
         return { ipcRenderer, contextBridge };
       },
-      process: { platform: 'win32' },
+      process: { platform: process.platform },
       location: { hash },
       document: { addEventListener: (type, listener) => this.documentEvents.on(type, listener) },
     };
@@ -240,7 +242,7 @@ class BrowserWindow extends EventEmitter {
     this.mouseIgnored = ignore;
     this.mouseForwarded = options?.forward === true;
   }
-  setAlwaysOnTop() {}
+  setAlwaysOnTop(...args) { this.nativeLayerArgs = args; }
   setVisibleOnAllWorkspaces() {}
 }
 
@@ -248,8 +250,8 @@ const electronHost = {
   app,
   BrowserWindow,
   ipcMain,
-  Menu: { setApplicationMenu: noop, buildFromTemplate: template => template },
-  nativeImage: { createFromPath: () => ({ isEmpty: () => false }) },
+  Menu: { setApplicationMenu: menu => { applicationMenu = menu; }, buildFromTemplate: template => template },
+  nativeImage: { createFromPath: () => ({ isEmpty: () => false, setTemplateImage: noop }) },
   powerMonitor: new EventEmitter(),
   screen,
   Tray,
@@ -317,6 +319,7 @@ try {
   await api.showWidget();
   assert.equal(windows.length, 2);
   const widgetApi = windows[1].bridge;
+  const hasLayerControls = typeof widgetApi.setWidgetLayer === 'function';
   const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
   if (!['1.0.0', '1.0.1'].includes(releaseVersion)) {
     const widget = windows[1];
@@ -372,6 +375,39 @@ try {
     }
     pass('floating window preserves the legacy card position across display changes');
   }
+  if (hasLayerControls) {
+    const widget = windows[1];
+    const bottomArgs = process.platform === 'darwin' ? [true, 'normal', -1] : [false];
+    assert.equal(await widgetApi.getWidgetLayer(), 'top');
+    assert.deepEqual(widget.nativeLayerArgs, [true, 'floating']);
+    const layers = [];
+    const stopListening = widgetApi.onWidgetLayerChanged(layer => layers.push(layer));
+    widget.webContents.emit('did-finish-load');
+    await assert.rejects(widgetApi.setWidgetLayer('unknown'));
+    const changeLayer = handlers.get('niuma:set-widget-layer');
+    await assert.rejects(async () => changeLayer(childEvent, 'bottom'));
+    await assert.rejects(async () => changeLayer({ ...childEvent, sender: new EventEmitter() }, 'bottom'));
+    assert.equal(await widgetApi.setWidgetLayer('bottom'), 'bottom');
+    assert.deepEqual(widget.nativeLayerArgs, bottomArgs);
+    assert.deepEqual(layers, ['top', 'bottom']);
+    assert.equal(await api.getWidgetLayer(), 'bottom');
+    const recover = trayMenu.find(item => item.label === '将浮窗置顶').click;
+    if (process.platform === 'darwin') {
+      const windowMenu = applicationMenu.find(item => item.label === '窗口').submenu;
+      assert.equal(windowMenu.find(item => item.label === '将浮窗置顶').click, recover);
+    }
+    await widgetApi.hideWidget();
+    await recover();
+    assert.equal(widget.isVisible(), true);
+    assert.equal(await widgetApi.getWidgetLayer(), 'top');
+    assert.deepEqual(widget.nativeLayerArgs, [true, 'floating']);
+    assert.deepEqual(layers, ['top', 'bottom', 'top']);
+    stopListening();
+    await widgetApi.setWidgetLayer('bottom');
+    assert.deepEqual(layers, ['top', 'bottom', 'top']);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'desktop.json'), 'utf8')).widgetLayer, 'bottom');
+    pass('legacy settings default to top; guarded layer changes and menu recovery stay synchronized');
+  }
   assert.equal((await widgetApi.getState()).settings.dailySalary, 680);
   let received = null;
   const unsubscribe = widgetApi.onStateChanged(value => {
@@ -398,6 +434,18 @@ try {
   assert.equal(reloaded.privacy, true);
   assert.equal(reloaded.settings.dailySalary, 680);
   assert.equal(reloaded.settings.endTime, '18:00');
+  if (hasLayerControls) {
+    assert.equal(await windows[0].bridge.getWidgetLayer(), 'bottom');
+    await windows[0].bridge.showWidget();
+    assert.deepEqual(windows[1].nativeLayerArgs, process.platform === 'darwin' ? [true, 'normal', -1] : [false]);
+    if (process.platform === 'darwin') {
+      app.emit('activate', {}, true);
+      assert.equal(windows[1].isVisible(), false);
+      assert.equal(windows[0].isMinimized(), false);
+      assert.equal(await windows[0].bridge.getWidgetLayer(), 'bottom');
+    }
+    pass('the compact window starts on the saved layer after reopening the profile');
+  }
   pass('fresh main-process instance reads persisted salary, hours and privacy from isolated disk');
 } catch (error) {
   report.error = error.stack || String(error);

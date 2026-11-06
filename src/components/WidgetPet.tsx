@@ -162,7 +162,11 @@ export default function WidgetPet({ chasing, setChasing, boneButton, preview }: 
   return <>
     <div className="widget-pet-lane" ref={laneRef}>
       <button type="button" className="widget-dog" ref={dogRef} aria-label="和狗狗握手" title="和狗狗握手"
-        onPointerDown={e => { if (e.isPrimary && e.button === 0) e.currentTarget.setPointerCapture(e.pointerId); }}
+        onPointerDown={e => {
+          if (!e.isPrimary || e.button !== 0) return;
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+        }}
         onClick={() => handshake.current()}>
         <span className="pet-sprite" ref={spriteRef} aria-hidden="true" />
       </button>
