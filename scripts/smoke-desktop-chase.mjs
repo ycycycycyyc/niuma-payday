@@ -14,13 +14,13 @@ async function paintedPet(desktop) {
     if (!frame || page.isClosed()) continue;
     const native = await desktop.browserWindow(page);
     try {
-      const win = await native.evaluate(w => w.isVisible() ? { ...w.getContentBounds(), zoom:w.webContents.getZoomFactor(), top:w.isAlwaysOnTop() } : null);
-      if (win) return { x:win.x + frame.x * win.zoom, y:win.y + frame.y * win.zoom, bone:frame.bone, top:win.top };
+      const win = await native.evaluate(w => ({ ...w.getContentBounds(), zoom:w.webContents.getZoomFactor(), top:w.isAlwaysOnTop(), id:w.getMediaSourceId() }));
+      return { x:win.x + frame.x * win.zoom, y:win.y + frame.y * win.zoom, bone:frame.bone, top:win.top, id:win.id };
     } finally { await native.dispose(); }
   }
   return null;
 }
-export async function verifyDesktopChase(desktop, widget, { click, move, clickThrough, stop, raise, record }) {
+export async function verifyDesktopChase(desktop, widget, { click, move, clickThrough, stop, raise, verifyOrder, record }) {
   const button = name => widget.getByRole('button', { name, exact: true });
   const { card, area } = await desktop.evaluate(({ BrowserWindow, screen }) => {
     const w = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().endsWith('#/widget'));
@@ -44,6 +44,7 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
     return pet?.top && pet.bone && Math.hypot(pet.x - target.x, pet.y - target.y) < 100;
   }, { timeout:12000 }).toBe(true);
   const outdoors = await paintedPet(desktop);
+  if (verifyOrder) await verifyOrder(outdoors);
   assert.ok(outdoors.x < card.x || outdoors.x > card.x + card.width || outdoors.y < card.y || outdoors.y > card.y + card.height);
   await expect(widget.locator('.widget-dog')).toBeHidden();
   await clickThrough({ x:Math.round(outdoors.x), y:Math.round(outdoors.y) });

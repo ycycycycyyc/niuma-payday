@@ -39,7 +39,7 @@ function createSurface(area, root, developmentURL) {
     const loading = developmentURL
       ? win.loadURL(new URL('/pet.html', developmentURL).href)
       : win.loadFile(path.join(root, 'dist', 'pet.html'));
-    return { win, loading, ready: false, lastFrame: '' };
+    return { win, loading, ready: false, shown: false, lastFrame: '' };
   } catch (error) {
     win.destroy();
     throw error;
@@ -81,7 +81,7 @@ export class DesktopPet {
 
   async setMode(active, reducedMotion) {
     const widget = this.getWidget();
-    if (!widget || widget.isDestroyed() || !widget.isVisible()) {
+    if (!widget || widget.isDestroyed()) {
       this.end();
       return this.state;
     }
@@ -122,7 +122,7 @@ export class DesktopPet {
     const start = this.home(widget, trip);
     const display = screen.getDisplayNearestPoint({ x: Math.round(start.x), y: Math.round(start.y) });
     await this.surface(display).loading;
-    if (this.trip !== trip || widget.isDestroyed() || !widget.isVisible()) return;
+    if (this.trip !== trip || widget !== this.getWidget() || widget.isDestroyed()) return;
     // The original dog kept walking while the graphics page loaded.
     const hit = this.getHit();
     if (hit?.width) trip.dockX = hit.left + hit.width / 2;
@@ -177,7 +177,7 @@ export class DesktopPet {
     trip.idleCursor = null;
     try {
       const widget = this.getWidget();
-      if (!widget || widget.isDestroyed() || !widget.isVisible()) { this.end(); return; }
+      if (!widget || widget.isDestroyed()) { this.end(); return; }
       const home = this.home(widget, trip);
       const returning = this.state.phase === 'returning';
       const area = screen.getDisplayNearestPoint(cursor).workArea;
@@ -210,7 +210,12 @@ export class DesktopPet {
       const boneHere = bone && intersects(area, bone.x, bone.y, BONE_SIZE);
       if (!dogHere && !boneHere) {
         const idle = this.surfaces.get(display.id);
-        if (idle?.win.isVisible()) { idle.win.hide(); idle.lastFrame = ''; }
+        if (idle?.shown) {
+          idle.win.webContents.send('niuma:desktop-pet-frame', { dog: null, bone: null });
+          idle.win.hide();
+          idle.shown = false;
+          idle.lastFrame = '';
+        }
         continue;
       }
       const surface = this.surface(display);
@@ -226,7 +231,7 @@ export class DesktopPet {
         win.webContents.send('niuma:desktop-pet-frame', frame);
         surface.lastFrame = key;
       }
-      if (!win.isVisible()) win.showInactive();
+      if (!surface.shown) { win.showInactive(); surface.shown = true; }
     }
   }
 }

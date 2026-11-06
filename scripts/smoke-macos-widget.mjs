@@ -68,6 +68,16 @@ export async function verifyMacWidget(desktop, widget, scratch, record) {
     await verifyDesktopChase(desktop, widget, {
       click: locator => macClick(desktop, locator),
       move: p => pointer('move', p),
+      verifyOrder: async pet => {
+        const id = Number(pet.id.split(':')[1]);
+        await expect.poll(async () => {
+          const { stdout } = await run(tool, ['order', String(id), String(receiverId)]);
+          const onscreen = JSON.parse(stdout);
+          const overlay = onscreen.find(w => w.id === id);
+          const other = onscreen.find(w => w.id === receiverId);
+          return !!overlay && !!other && overlay.order < other.order && overlay.level > other.level;
+        }).toBe(true);
+      },
       clickThrough: async p => {
         const before = (await readReceiver()).clicks;
         await pointer('click', p);

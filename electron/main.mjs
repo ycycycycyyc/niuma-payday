@@ -27,6 +27,7 @@ if (app.commandLine.hasSwitch('user-data-dir')) {
 
 let mainWindow;
 let widgetWindow;
+let widgetShown = false;
 let tray;
 let trayMenuUpdate;
 let quitting = false;
@@ -49,7 +50,7 @@ const appIcon = path.join(root, 'build', 'icon.png');
 const statePath = () => path.join(app.getPath('userData'), 'state.json');
 const desktopPath = () => path.join(app.getPath('userData'), 'desktop.json');
 const desktopPet = new DesktopPet({
-  root, developmentURL, getWidget: () => widgetWindow, getHit: () => widgetPet,
+  root, developmentURL, getWidget: () => widgetShown ? widgetWindow : null, getHit: () => widgetPet,
   notify(state) {
     if (widgetWindow && !widgetWindow.isDestroyed() && !widgetWindow.webContents.isDestroyed()) {
       widgetWindow.webContents.send('niuma:desktop-pet-state', state);
@@ -348,9 +349,15 @@ async function createWidget() {
       hideWidget();
     }
   });
-  widgetWindow.on('hide', stopWidgetPointerTracking);
+  // AppKit also emits hide when another app merely covers the salary card.
+  widgetWindow.on('hide', () => {
+    if (process.platform !== 'darwin' || app.isHidden()) stopWidgetPointerTracking();
+  });
+  widgetWindow.on('show', () => {
+    if (widgetShown && !lanePointerTimer) startWidgetPointerTracking();
+  });
   widgetWindow.webContents.on('did-start-loading', () => { desktopPet.end(); widgetPet = null; lastPetPointer = null; });
-  widgetWindow.on('closed', () => { widgetWindow = undefined; widgetPet = null; stopWidgetPointerTracking(); });
+  widgetWindow.on('closed', () => { widgetShown = false; widgetWindow = undefined; widgetPet = null; stopWidgetPointerTracking(); });
   const createdWindow = widgetWindow;
   try {
     await loadWindow(createdWindow, true);
@@ -383,6 +390,7 @@ async function showWidget(minimizeMain = true, mode = 'manual') {
       }
     }
     refitWidget();
+    widgetShown = true;
     widgetWindow.showInactive();
     startWidgetPointerTracking();
     if (minimizeMain && mainWindow && !mainWindow.isMinimized()) mainWindow.minimize();
@@ -403,10 +411,16 @@ function restoreMain() {
   mainWindow.focus();
 }
 
+function dismissNativeWidget() {
+  widgetShown = false;
+  stopWidgetPointerTracking();
+  widgetWindow?.hide();
+}
+
 function hideWidget(restoreWithoutTray = true) {
   widgetRequest++;
   widgetSession = dismissWidget(appState, new Date(), widgetSession);
-  widgetWindow?.hide();
+  dismissNativeWidget();
   // Without a tray, hiding the only visible window must not strand the application.
   if (restoreWithoutTray && !tray && mainWindow?.isMinimized()) restoreMain();
 }
@@ -488,7 +502,7 @@ function tickSchedule() {
     const result = decideWidget(appState, new Date(), widgetSession, mainVisible);
     widgetSession = result.session;
     if (result.action === 'show') void showWidget(false, 'auto').catch(() => {});
-    if (result.action === 'hide') { widgetRequest++; widgetWindow?.hide(); }
+    if (result.action === 'hide') { widgetRequest++; dismissNativeWidget(); }
   } catch (error) { console.warn('Unable to check work schedule:', error.message); }
 }
 
