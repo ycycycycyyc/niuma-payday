@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowDownRight, ArrowRight, ArrowUpRight, BadgeCheck, Check, ChevronRight, Coffee, Coins, Eye, EyeOff, FlaskConical, Flower2, Heart, LayoutDashboard, Maximize2, Minus, Monitor, MoreHorizontal, Pause, Play, Plus, Settings2, ShieldCheck, Sparkles, Sun, Target, Trophy, Wallet, X, Zap } from 'lucide-react';
 import { DEFAULT_SETTINGS, calculateSalary, earningsBetween, type SalarySettings } from './lib/salary';
 import { clockDate, currencySymbol, duration, money, useClock } from './lib/clock';
-import { DEFAULT_STATE, readState, subscribeState, writePrivacy, writeState, type AppState } from './lib/store';
+import { DEFAULT_STATE, readState, subscribeState, writePrivacy, writeSavingsEntry, writeState, type AppState } from './lib/store';
 import SettingsModal from './components/SettingsModal';
+import SavingsBoard from './components/SavingsBoard';
 import LiveAmount from './components/LiveAmount';
 import Mascot from './components/Mascot';
 import Widget, { widgetLayoutStyle } from './components/Widget';
 import CompanionPet, { type CompanionOrigin } from './components/CompanionPet';
 import { companionOrigin } from './lib/companion-origin';
 import { classifyDay, dateKey, fetchCalendarYear } from '../shared/calendar.mjs';
+import { localMonthKey, type SavingsEntry } from '../shared/savings.mjs';
 import { describeDesktopError, isDesktopHost } from './lib/desktop-error';
 import { version } from '../package.json';
 
@@ -48,6 +50,10 @@ function App() {
   const [profileError, setProfileError] = useState('');
   const [page, setPage] = useState<Page>('dashboard');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const openSalarySettings = useCallback(() => setSettingsOpen(true), []);
+  const saveSavingsEntry = useCallback(async (entry: SavingsEntry, previous: SavingsEntry | null) => {
+    setState(await writeSavingsEntry(entry, previous));
+  }, []);
   const [goalOpen, setGoalOpen] = useState(false);
   const [browserWidget, setBrowserWidget] = useState(false);
   const [browserCompanion, setBrowserCompanion] = useState<CompanionOrigin | null>(null);
@@ -254,6 +260,8 @@ function App() {
             <section className="stat-card"><span className="stat-icon peach"><ArrowDownRight size={21} /></span><div><div className="stat-label">距离下班</div><strong className="countdown">{salary.status === 'off' ? '今日休息' : salary.status === 'after' ? '已下班，去生活' : duration(salary.remainingSeconds)}</strong></div></section>
             <section className="stat-card"><span className="stat-icon yellow"><Coins size={20} /></span><div><div className="stat-label">下次发薪日{salary.paydayEstimated && ' · 估算'}</div><strong title={salary.nextPayday?.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}>{salary.daysToPayday === null ? '暂无法确定' : salary.daysToPayday === 0 ? '就是今天' : <>{salary.daysToPayday}<small> 天后</small></>}</strong></div></section>
           </div>
+
+          <SavingsBoard state={state} currentMonth={localMonthKey(realNow)} onConfigure={openSalarySettings} onSave={saveSavingsEntry} />
 
           <div className="lower-grid"><section className="week-card"><div className="card-top"><div><h3>本周工资 <small>{settings.currency}</small></h3></div></div><div className="week-chart" role="img" aria-label={`本周每日预估收入：${salary.week.map(day => `${day.label} ${amountText(day.earned)}`).join('，')}`}>
             {salary.week.map(day => <div className={`chart-column ${day.isToday ? 'today' : ''} ${day.isFuture ? 'future' : ''}`} key={day.label}><div className="bar-value" title={state.privacy || day.isFuture ? undefined : amountText(day.earned)}>{state.privacy ? '•••' : day.isFuture ? '—' : cardFigure(day.earned)}</div><div className="bar-track"><div className="bar" style={{ '--bar-height': `${Math.max(5, (day.earned / (salary.dailySalary || 1)) * 100)}%` } as CSSProperties}>{day.isToday && <span>✦</span>}</div></div><span className="bar-label">{day.isToday ? '今天' : day.label}</span></div>)}

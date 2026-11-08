@@ -12,6 +12,7 @@ import { setWindowsWidgetLayer } from './windows-widget-layer.mjs';
 import { DesktopPet } from './desktop-pet.mjs';
 import { normalizePetLaunchPose } from '../shared/desktop-pet-motion.mjs';
 import { migrateLegacyProfile } from '../shared/profile-migration.mjs';
+import { normalizeSavingsLedger, recordSavingsEntry } from '../shared/savings.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const developmentURL = process.env.VITE_DEV_SERVER_URL;
@@ -688,6 +689,11 @@ function installIPC() {
     return minimizeWidget(value.reducedMotion);
   }));
   handle('niuma:get-state', () => appState);
+  handle('niuma:write-savings-entry', (entry, previous) => {
+    const savings = recordSavingsEntry(appState, entry, previous);
+    if (savings !== appState.savings) saveProfile({ ...appState, savings });
+    return appState;
+  });
   handle('niuma:set-privacy', hidden => {
     if (typeof hidden !== 'boolean') throw new Error('[SETTINGS_INVALID] 金额显隐设置无效。');
     saveProfile({ version: 3, configured: false, ...appState, privacy: hidden });
@@ -699,12 +705,13 @@ function installIPC() {
   handle('niuma:set-widget-appearance', setWidgetAppearance);
   handle('niuma:set-state', (value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Settings must be an object.');
-    const serialized = JSON.stringify(value);
+    const serialized = JSON.stringify({ ...value, savings: undefined });
     if (Buffer.byteLength(serialized, 'utf8') > 1024 * 1024) throw new Error('Settings are too large.');
     const next = JSON.parse(serialized);
     if (!validState(next)) throw new Error('[SETTINGS_INVALID] 设置无效，请检查月薪、发薪日、上下班时间和午休安排。');
     // Calendar data is authoritative in the main process. A stale renderer must not replace it.
     next.calendar = normalizeCalendarCache(appState?.calendar);
+    next.savings = appState?.savings ?? {};
     saveProfile(next);
     backgroundTick();
     return appState;
@@ -747,9 +754,10 @@ if (!app.requestSingleInstanceLock()) {
     appState = migrateLegacyProfile(readJSON(statePath(), null));
     if (appState) {
       const calendar = normalizeCalendarCache(appState.calendar);
+      const savings = normalizeSavingsLedger(appState.savings);
       // Preserve legacy preferences before validation, without scheduling before monthly confirmation.
-      appState = validState(appState) ? { ...appState, calendar }
-        : { version: 3, configured: false, calendar };
+      appState = validState(appState) ? { ...appState, calendar, savings }
+        : { version: 3, configured: false, calendar, savings };
     }
     desktopState = readJSON(desktopPath(), {});
     installIPC();

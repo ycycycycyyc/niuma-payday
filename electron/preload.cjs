@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('niuma', {
   setPrivacy: (hidden) => ipcRenderer.invoke('niuma:set-privacy', hidden),
   getState: () => ipcRenderer.invoke('niuma:get-state'),
   setState: (value) => ipcRenderer.invoke('niuma:set-state', value),
+  writeSavingsEntry: (entry, previous) => ipcRenderer.invoke('niuma:write-savings-entry', entry, previous),
   onStateChanged: (callback) => listen('niuma:state-changed', callback),
   onWindowState: (callback) => listen('niuma:window-state', callback),
   onCalendarStatus: (callback) => listen('niuma:calendar-status', callback),

@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { DEFAULT_STATE, normalizeState } from './lib/store';
+import { recordSavingsEntry } from '../shared/savings.mjs';
 
 // The real App uses its ordinary desktop API against a private, temporary
 // profile. No local storage, native bridge or remote calendar is accessed.
@@ -25,7 +26,12 @@ export function renderPreviewDashboard(root: HTMLElement) {
     platform: 'preview',
     getState: async () => { await initialPrivacy; return structuredClone(profile); },
     setState: async value => {
-      profile = normalizeState(value);
+      profile = { ...normalizeState(value), savings: profile.savings };
+      notify('state');
+      return structuredClone(profile);
+    },
+    writeSavingsEntry: async (entry, previous) => {
+      profile = { ...profile, savings: recordSavingsEntry(profile, entry, previous) };
       notify('state');
       return structuredClone(profile);
     },

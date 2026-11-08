@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { DEFAULT_STATE, readState, writeState } from '../src/lib/store.ts';
+import { DEFAULT_STATE, readState, writePrivacy, writeSavingsEntry, writeState } from '../src/lib/store.ts';
 import { describeDesktopError, isDesktopHost } from '../src/lib/desktop-error.ts';
+import type { SavingsEntry } from '../shared/savings.mjs';
 
 const requested = () => ({ ...structuredClone(DEFAULT_STATE), configured: true, settings: { ...structuredClone(DEFAULT_STATE.settings), monthlySalary: 16_800, currency: 'HKD' as const, region: 'CN' as const } });
 
@@ -21,6 +22,39 @@ function host(t: TestContext, bridge: unknown, agent = 'Electron/45.2.3', initia
   return { browserWrites, browserReads };
 }
 const storageBridge = (setState: (value: unknown) => Promise<unknown>) => ({ setState, getState: async () => null, onStateChanged: () => () => {} });
+
+const deposit: SavingsEntry = { month: '2020-12', currency: 'HKD', salaryCents: 1_680_000, rentCents: 500_000, livingCents: 250_000 };
+
+test('a web ledger survives reloads, stale settings and privacy saves, and rejects lost updates', async t => {
+  host(t, undefined, 'Chrome');
+  await assert.rejects(writeSavingsEntry(deposit, null), /SAVINGS_UNCONFIGURED/);
+  const original = requested();
+  await writeState(original);
+  const january = { ...deposit, month: '2021-01' };
+  await Promise.all([writeSavingsEntry(deposit, null), writeSavingsEntry(january, null)]);
+  const revised = { ...deposit, livingCents: 300_001 };
+  await writeSavingsEntry(revised, deposit);
+  await writeSavingsEntry(revised, deposit);
+  await assert.rejects(writeSavingsEntry({ ...deposit, rentCents: 160_000 }, deposit), /SAVINGS_CONFLICT/);
+  await writeState({ ...original, settings: { ...original.settings, monthlySalary: 10_000, currency: 'USD' } });
+  await writePrivacy(true);
+  const reloaded = await readState();
+  assert.deepEqual(reloaded.savings, { '2020-12': revised, '2021-01': january });
+  assert.equal(reloaded.privacy, true);
+  assert.equal(reloaded.settings.currency, 'USD');
+});
+
+test('desktop ledger writes require a receipt for the exact month and amounts', async t => {
+  let reply: unknown;
+  const browser = host(t, { ...storageBridge(async () => null), writeSavingsEntry: async () => reply });
+  const state = requested();
+  for (reply of [null, state, { ...state, savings: { [deposit.month]: { ...deposit, rentCents: 0 } } }]) {
+    await assert.rejects(writeSavingsEntry(deposit, null), /NIUMA_WRITE_UNCONFIRMED/);
+  }
+  reply = { ...state, savings: { [deposit.month]: deposit } };
+  assert.deepEqual(await writeSavingsEntry(deposit, null), reply);
+  assert.deepEqual(browser.browserWrites, []);
+});
 
 test('a missing Electron preload cannot silently save or load a browser profile', async t => {
   const browser = host(t, undefined);

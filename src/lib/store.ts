@@ -3,11 +3,12 @@ import { normalizeCalendarCache, type CalendarCache } from '../../shared/calenda
 import { isDesktopHost } from './desktop-error';
 import type { PetLaunchPose } from './pet-motion';
 import { migrateLegacyProfile } from '../../shared/profile-migration.mjs';
+import { normalizeSavingsLedger, recordSavingsEntry, sameSavingsEntry, type SavingsEntry, type SavingsLedger } from '../../shared/savings.mjs';
 
-export type AppState = { version: 3; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache };
+export type AppState = { version: 3; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache; savings: SavingsLedger };
 export type WidgetLayer = 'top' | 'bottom';
 export type DesktopPetState = { phase: 'docked' | 'chasing' | 'returning' | 'companion'; dockX?: number; facing?: 1 | -1 };
-export const DEFAULT_STATE: AppState = { version: 3, configured: false, settings: DEFAULT_SETTINGS, goal: { name: '今天的咖啡自由', amount: 25 }, privacy: false, calendar: {} };
+export const DEFAULT_STATE: AppState = { version: 3, configured: false, settings: DEFAULT_SETTINGS, goal: { name: '今天的咖啡自由', amount: 25 }, privacy: false, calendar: {}, savings: {} };
 const KEY = 'niuma.payday.v3';
 
 declare global {
@@ -16,6 +17,7 @@ declare global {
       platform: string;
       getState(): Promise<unknown>;
       setState(state: unknown): Promise<unknown>;
+      writeSavingsEntry?(entry: SavingsEntry, previous: SavingsEntry | null): Promise<unknown>;
       setPrivacy?(hidden: boolean): Promise<boolean>;
       onStateChanged(callback: (state: unknown) => void): () => void;
       refreshCalendar(): Promise<{ status: string; message: string; calendar: CalendarCache }>;
@@ -54,6 +56,7 @@ export function normalizeState(value: unknown): AppState {
       ? { name: input.goal.name.trim().slice(0, 32), amount: input.goal.amount } : { ...DEFAULT_STATE.goal },
     privacy: input.privacy === true,
     calendar: normalizeCalendarCache(input.calendar),
+    savings: normalizeSavingsLedger(input.savings),
   };
 }
 
@@ -96,21 +99,56 @@ export async function readState() {
     if (value === undefined) throw new Error('NIUMA_READ_UNCONFIRMED');
     return normalizeState(value); // null is a genuine first run with no profile yet.
   }
+  return readBrowserState();
+}
+
+function readBrowserState(): AppState {
   const text = localStorage.getItem(KEY) ?? localStorage.getItem('niuma.payday.v2') ?? localStorage.getItem('niuma.payday.v1');
   if (!text) return structuredClone(DEFAULT_STATE);
   try { return normalizeState(JSON.parse(text)); } catch { return structuredClone(DEFAULT_STATE); }
 }
 
+// Read and write under one origin-wide lock so a second tab cannot erase an entry.
+function updateBrowserState(update: (latest: AppState) => AppState): Promise<AppState> {
+  const store = () => {
+    const latest = readBrowserState();
+    const next = update(latest);
+    if (next !== latest) localStorage.setItem(KEY, JSON.stringify(next));
+    return next;
+  };
+  const locks = window.navigator?.locks;
+  return locks ? locks.request(KEY, store) : Promise.resolve(store());
+}
+
 export async function writeState(state: AppState): Promise<AppState> {
   if (isDesktopHost()) return confirmSave(await desktopStore().setState(state), state);
-  localStorage.setItem(KEY, JSON.stringify(state));
-  return state;
+  return updateBrowserState(latest => ({ ...state, savings: latest.savings }));
+}
+
+export async function writeSavingsEntry(entry: SavingsEntry, previous: SavingsEntry | null): Promise<AppState> {
+  if (isDesktopHost()) {
+    const bridge = desktopStore();
+    if (!bridge.writeSavingsEntry) throw new Error('NIUMA_BRIDGE_MISSING');
+    const saved = normalizeState(await bridge.writeSavingsEntry(entry, previous));
+    if (!saved.configured || !sameSavingsEntry(saved.savings[entry.month] ?? null, entry)) {
+      throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    }
+    return saved;
+  }
+  return updateBrowserState(latest => {
+    const savings = recordSavingsEntry(latest, entry, previous);
+    return savings === latest.savings ? latest : { ...latest, savings };
+  });
 }
 
 export async function writePrivacy(hidden: boolean) {
   if (window.niuma?.setPrivacy) {
     const saved = await window.niuma.setPrivacy(hidden);
     if (saved !== hidden) throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    return;
+  }
+  if (!isDesktopHost()) {
+    await updateBrowserState(latest => ({ ...latest, privacy: hidden }));
     return;
   }
   const latest = await readState();

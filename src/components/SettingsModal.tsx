@@ -113,7 +113,7 @@ export default function SettingsModal({ settings, calendar, onSave, onClose }: S
                 {errorFor('currency')}
               </div>
             </div>
-            <p className="settings-hint settings-shift-hint">币种只影响金额显示，节假日地区可独立选择。</p>
+            <p className="settings-hint settings-shift-hint">存钱记录按币种分别累计，节假日地区可独立选择。</p>
             {preview && <p className="schedule-summary" aria-live="polite">本月 {preview.workingDaysInMonth} 个工作日 · 参考日薪 {currencySymbol(draft.currency)}{money(preview.dailySalary)}。{preview.workingDaysInMonth === 0 ? '本月没有工作日，收入暂停增长。' : '月薪按工作日均分，工作时段内实时增长。'}{preview.calendarNotice && ' 日历暂缺时按周一至周五估算。'}</p>}
           </fieldset>
 
