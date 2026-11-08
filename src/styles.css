@@ -56,12 +56,7 @@ h1, h2, h3, p { margin: 0; }
 .nav-dot { display: none; margin-left: auto; width: 5px; height: 5px; border-radius: 50%; background: #8a586e; }
 .selected .nav-dot { display: block; }
 .new-tag { margin-left: auto; font-size: 8px; font-weight: 750; letter-spacing: .5px; color: #765560; }
-.sidebar-note { position: relative; margin: auto 13px 52px; padding-top: 42px; }
-.note-spark { font-size: 30px; line-height: 1; color: #88666c; }
-.sidebar-note p { margin-top: 16px; color: #805f66; font-size: 12px; line-height: 1.9; }
-.sidebar-note > span:last-of-type { display: block; margin-top: 10px; font-size: 7px; letter-spacing: 1.2px; color: #805f66; }
-.note-line { margin-top: 22px; width: 26px; height: 1px; background: #e8cec9; }
-.sidebar-bottom { padding-top: 12px; }
+.sidebar-bottom { margin-top: auto; padding-top: 12px; }
 .local-status { display: flex; align-items: center; gap: 6px; margin: 19px 8px 0; padding-top: 17px; border-top: 1px solid var(--line); font-size: 9px; color: #805f66; white-space: nowrap; }
 .version { margin-left: auto; color: #88666c; font-size: 9px; }
 .main-shell { margin-left: 216px; width: calc(100% - 216px); min-width: 0; }
@@ -150,6 +145,9 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .stat-card strong.countdown { font-size: clamp(16px, 1.65vw, 23px); }
 .stat-card strong small { font-size: 11px; color: #805f66; font-weight: 500; letter-spacing: 0; }
 .lower-grid { align-items: stretch; }
+.lower-grid > .savings-board { margin-bottom: 0; }
+.lower-grid:has(.savings-disclosure[aria-expanded="true"]) { align-items: start; }
+.lower-grid .week-chart { flex: 1; min-height: 140px; max-height: 220px; }
 .week-card { display: flex; flex-direction: column; padding: 20px 23px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .week-card h3 { margin-top: 6px; font-size: 15px; font-weight: 600; }
 .week-card h3 small { margin-left: 4px; font-size: 10px; font-weight: 500; color: var(--muted); }
@@ -171,20 +169,8 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .chart-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); color: #88666c; font-size: 8px; }
 .chart-footer > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
 .legend-dot { width: 5px; height: 5px; border-radius: 2px; background: #e2c2c1; }
-.right-stack { display: grid; grid-template-rows: 1.28fr 1fr; gap: 16px; }
-.goal-card, .rest-card { padding: 17px 19px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
-.goal-card .section-label, .rest-card .section-label { font-size: 11px; }
-.goal-card .section-label svg { color: #805f66; }
-.goal-card .icon-button { width: 23px; height: 23px; }
-.goal-content { display: flex; align-items: center; gap: 11px; margin: 17px 0 15px; }
-.goal-icon { display: grid; place-items: center; flex-shrink: 0; width: 43px; height: 43px; border-radius: 50%; background: #f5e8de; color: #805f66; }
-.goal-icon.complete { background: #f3e3da; color: #765560; }
-.goal-content h3 { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
-.goal-content p { margin-top: 5px; font-size: 9px; color: #805f66; line-height: 1.6; }
-.goal-progress { height: 4px; border-radius: 4px; background: #f4e6dd; overflow: hidden; }
-.goal-progress i { display: block; height: 100%; border-radius: inherit; background: #c8a0a7; }
-.goal-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; color: #805f66; font-size: 8px; }
-.goal-caption strong { font-weight: 500; color: #805f66; }
+.rest-card { padding: 17px 19px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.rest-card .section-label { font-size: 11px; }
 .rest-card { background: #f8eee4; border-color: #f1ded5; }
 .rest-card .section-label svg { color: #805f66; }
 .tiny-pill { font-size: 6px; letter-spacing: .8px; color: #88666c; white-space: nowrap; }
@@ -285,7 +271,7 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 /* Pink paper surfaces, plum ink, and a small printed flower on the earnings card. */
 .sidebar { background: var(--shell-pink); }
 .brand-mark { border-radius: 13px; background: var(--rose); color: #863957; }
-.brand-dot, .heading-star, .sidebar-note .note-spark { color: var(--accent); }
+.brand-dot, .heading-star { color: var(--accent); }
 .nav-item.selected { color: var(--berry-ink); background: var(--rose); }
 .nav-item:hover { background: var(--dialogue-pink); }
 .nav-dot { background: var(--accent); }
@@ -336,9 +322,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 .chart-column.today .bar-value, .chart-column.today .bar-label { color: var(--berry-ink); }
 .legend-dot { background: #c582a4; }
 .bar > span { color: #fff6fb; }
-.goal-icon, .goal-icon.complete { background: #e7ecdf; color: #576b4a; }
-.goal-progress { background: #e9eadd; }
-.goal-progress i { background: #84946e; }
 .rest-card { border-color: var(--line); background: var(--shell-pink); }
 .rest-card .section-label, .rest-card .section-label svg, .rest-content h3 { color: #68415b; }
 .rest-content p, .rest-card .tiny-pill, .rest-card .fine-print { color: var(--muted); }
@@ -407,12 +390,10 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .stat-card strong { font-size: 20px; }
   .stat-card strong.countdown { font-size: 18px; }
   .week-card { padding-inline: 19px; }
-  .goal-card, .rest-card { padding-inline: 14px; }
-  .goal-content { gap: 8px; }
+  .rest-card { padding-inline: 14px; }
   .rest-content { flex-wrap: wrap; gap: 10px; }
   .rest-content h3 { font-size: 12px; }
   .rest-button { margin-left: auto; }
-  .right-stack { grid-template-rows: 1.1fr 1fr; }
   .week-chart { gap: 8px; }
   .toast { left: calc(50% + 95px); }
 }
@@ -453,10 +434,6 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .stat-card strong.countdown { font-size: 18px; }
   .stat-label { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 5px; }
   .stat-label span { font-size: 5px; }
-  .goal-icon { width: 35px; height: 35px; }
-  .goal-icon svg { width: 21px; }
-  .goal-content h3 { font-size: 11px; }
-  .goal-content p { font-size: 8px; }
   .week-card { padding-inline: 16px; }
   .bar-value { font-size: 8px; }
   .chart-footer { font-size: 7px; }
@@ -482,7 +459,7 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .sidebar nav { display: flex; gap: 5px; margin-top: 18px; }
   .nav-item { justify-content: center; min-height: 39px; padding: 0 9px; font-size: 11px; }
   .nav-dot, .new-tag, .selected .nav-dot { display: none; }
-  .sidebar-label, .sidebar-note, .local-status { display: none; }
+  .sidebar-label, .local-status { display: none; }
   .sidebar-bottom { position: absolute; top: 19px; right: 20px; padding: 0; }
   .sidebar-bottom .nav-item { width: 36px; min-height: 36px; padding: 0; font-size: 0; gap: 0; }
   .sidebar-bottom .nav-item svg { width: 19px; }
@@ -506,6 +483,9 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .achievement-emblem { width: 65px; height: 65px; }
   .achievement-emblem svg { width: 30px; }
   .achievement-summary h2 { font-size: 19px; }
+}
+@media (max-width: 1000px) {
+  .lower-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 600px) {
   .sidebar { padding-inline: 18px; }
@@ -553,13 +533,8 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
   .week-chart { height: 168px; gap: 10px; }
   .bar-value { font-size: 8px; }
   .chart-footer { font-size: 8px; }
-  .right-stack { grid-template-rows: auto auto; gap: 15px; }
-  .goal-card, .rest-card { padding: 19px 21px; }
-  .goal-card .section-label, .rest-card .section-label { font-size: 12px; }
-  .goal-icon { width: 43px; height: 43px; }
-  .goal-content h3 { font-size: 13px; }
-  .goal-content p { font-size: 10px; }
-  .goal-caption { font-size: 9px; }
+  .rest-card { padding: 19px 21px; }
+  .rest-card .section-label { font-size: 12px; }
   .rest-content { flex-wrap: nowrap; }
   .rest-content h3 { font-size: 14px; }
   .rest-content p { font-size: 9px; }
@@ -609,14 +584,13 @@ main { max-width: 1512px; margin: auto; padding: 31px 32px 19px; }
 }
 
 /* Labels that carry actual decisions stay readable even on the compact dashboard. */
-.sidebar-note > .note-spark:last-of-type { display: inline; margin: 0; font-size: 28px; line-height: 1; color: #b76679; }
 .page-heading p, .calendar-banner p { font-size: 12px; }
 .calendar-banner .button, .earnings-card .section-label { font-size: 12px; }
 .earnings-caption { font-size: 14px; }
 .earning-rate, .mint-badge, .track-label, .hero-footer, .hero-footer button { font-size: 11px; }
-.track-caption, .goal-caption, .chart-footer, .week-chart .bar-label { font-size: 10px; }
-.stat-label, .goal-card .section-label, .rest-card .section-label { font-size: 12px; }
-.goal-content p, .rest-content p, .buddy-copy p { font-size: 10px; }
+.track-caption, .chart-footer, .week-chart .bar-label { font-size: 10px; }
+.stat-label, .rest-card .section-label { font-size: 12px; }
+.rest-content p, .buddy-copy p { font-size: 10px; }
 .encourage-button, .rest-button, .day-actions .text-button { font-size: 11px; }
 .mood-card > .card-top { color: #764357; }
 .mood-card .buddy-label { font-size: 9px; }

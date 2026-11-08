@@ -10,7 +10,7 @@
 }
 .savings-board-header, .savings-board-header h2,
 .savings-budget-head, .savings-budget-footer, .savings-dialog header,
-.savings-dialog-title, .savings-calculation, .savings-dialog footer {
+.savings-dialog-title, .savings-dialog footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -129,13 +129,12 @@
   font-variant-numeric: tabular-nums;
 }
 .savings-fields input:read-only, .savings-fields select:disabled { background: var(--paper); color: var(--muted); opacity: 1; }
-.savings-salary-field { grid-column: 1 / -1; }
-.savings-calculation { padding: 13px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--shell-pink); }
-.savings-calculation strong, .savings-calculation small { display: block; }
-.savings-calculation strong { font-size: 13px; }
-.savings-calculation small { margin-top: 4px; color: var(--muted); font-size: 10px; }
-.savings-calculation b { min-width: 0; color: var(--berry-ink); font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; text-align: right; }
-.savings-form-note, .savings-error { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.savings-allocation { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.savings-allocation label:last-child { color: var(--berry-ink); font-weight: 600; }
+.savings-allocation label:last-child input { background: var(--shell-pink); color: var(--berry-ink); font-weight: 600; }
+.savings-allocation input[aria-invalid="true"] { border-color: #933349; }
+.savings-overspend, .savings-error { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.savings-overspend strong { color: var(--berry-ink); font-variant-numeric: tabular-nums; }
 .savings-error { color: #933349; }
 .savings-dialog footer { justify-content: flex-end; margin-top: 20px; }
 @container savings (max-width: 610px) {

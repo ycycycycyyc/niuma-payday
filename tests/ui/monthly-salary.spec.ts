@@ -119,7 +119,6 @@ test('upgrading a daily profile keeps HKD with the mainland calendar and asks fo
   }, DEFAULT_SETTINGS);
   await page.goto('/');
   await expect(page.getByText('已保留原有偏好，请补填月薪后开始计薪。')).toBeVisible();
-  await expect(page.getByText('旧的小目标')).toBeVisible();
   await page.getByRole('button', { name: '设置我的月薪' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('月薪', { exact: true })).toHaveValue('');
@@ -131,5 +130,6 @@ test('upgrading a daily profile keeps HKD with the mainland calendar and asks fo
   await dialog.getByRole('button', { name: '保存并开始计薪' }).click();
   await page.reload();
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('niuma.payday.v3')!));
-  expect(saved).toMatchObject({ version: 3, configured: true, privacy: true, settings: { monthlySalary: 20000, currency: 'HKD', region: 'CN', paydayMode: 'fixed-day', payday: 15 } });
+  expect(saved).toMatchObject({ version: 3, configured: true, privacy: true, goal: { name: '旧的小目标', amount: 80 },
+    settings: { monthlySalary: 20000, currency: 'HKD', region: 'CN', paydayMode: 'fixed-day', payday: 15 } });
 });

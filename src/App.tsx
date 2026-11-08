@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowDownRight, ArrowRight, ArrowUpRight, BadgeCheck, Check, ChevronRight, Coffee, Coins, Eye, EyeOff, FlaskConical, Flower2, Heart, LayoutDashboard, Maximize2, Minus, Monitor, MoreHorizontal, Pause, Play, Plus, Settings2, ShieldCheck, Sparkles, Sun, Target, Trophy, Wallet, X, Zap } from 'lucide-react';
+import { ArrowDownRight, ArrowRight, ArrowUpRight, BadgeCheck, Check, ChevronRight, Coffee, Coins, Eye, EyeOff, FlaskConical, Flower2, Heart, LayoutDashboard, Maximize2, Minus, Monitor, Pause, Play, Plus, Settings2, ShieldCheck, Sparkles, Sun, Target, Trophy, Wallet, X, Zap } from 'lucide-react';
 import { DEFAULT_SETTINGS, calculateSalary, earningsBetween, type SalarySettings } from './lib/salary';
 import { clockDate, currencySymbol, duration, money, useClock } from './lib/clock';
 import { DEFAULT_STATE, readState, subscribeState, writePrivacy, writeSavingsEntry, writeState, type AppState } from './lib/store';
@@ -207,7 +207,6 @@ function App() {
         <button className={page === 'playground' ? 'nav-item selected' : 'nav-item'} onClick={() => setPage('playground')}><FlaskConical size={19} />快乐实验室</button>
         <button className={page === 'achievements' ? 'nav-item selected' : 'nav-item'} onClick={() => setPage('achievements')}><Trophy size={19} />打工成就</button>
       </nav>
-      <div className="sidebar-note"><span className="note-spark">✳</span><p>生活不止有工作，<br />还有每一笔小快乐。</p><div className="note-line" /></div>
       <div className="sidebar-bottom"><button className="nav-item" onClick={() => setSettingsOpen(true)}><Settings2 size={19} />工资与偏好设置</button><div className="local-status"><ShieldCheck size={14} /><span>数据只留在这台设备</span><span className="version">v{version}</span></div></div>
     </aside>
 
@@ -261,12 +260,11 @@ function App() {
             <section className="stat-card"><span className="stat-icon yellow"><Coins size={20} /></span><div><div className="stat-label">下次发薪日{salary.paydayEstimated && ' · 估算'}</div><strong title={salary.nextPayday?.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}>{salary.daysToPayday === null ? '暂无法确定' : salary.daysToPayday === 0 ? '就是今天' : <>{salary.daysToPayday}<small> 天后</small></>}</strong></div></section>
           </div>
 
-          <SavingsBoard state={state} currentMonth={localMonthKey(realNow)} onConfigure={openSalarySettings} onSave={saveSavingsEntry} />
-
-          <div className="lower-grid"><section className="week-card"><div className="card-top"><div><h3>本周工资 <small>{settings.currency}</small></h3></div></div><div className="week-chart" role="img" aria-label={`本周每日预估收入：${salary.week.map(day => `${day.label} ${amountText(day.earned)}`).join('，')}`}>
+          <div className="lower-grid">
+            <SavingsBoard state={state} currentMonth={localMonthKey(realNow)} onConfigure={openSalarySettings} onSave={saveSavingsEntry} />
+            <section className="week-card"><div className="card-top"><div><h3>本周工资 <small>{settings.currency}</small></h3></div></div><div className="week-chart" role="img" aria-label={`本周每日预估收入：${salary.week.map(day => `${day.label} ${amountText(day.earned)}`).join('，')}`}>
             {salary.week.map(day => <div className={`chart-column ${day.isToday ? 'today' : ''} ${day.isFuture ? 'future' : ''}`} key={day.label}><div className="bar-value" title={state.privacy || day.isFuture ? undefined : amountText(day.earned)}>{state.privacy ? '•••' : day.isFuture ? '—' : cardFigure(day.earned)}</div><div className="bar-track"><div className="bar" style={{ '--bar-height': `${Math.max(5, (day.earned / (salary.dailySalary || 1)) * 100)}%` } as CSSProperties}>{day.isToday && <span>✦</span>}</div></div><span className="bar-label">{day.isToday ? '今天' : day.label}</span></div>)}
           </div><div className="chart-footer"><span><i className="legend-dot" />排班收入预估</span><span>{salary.workingDaysInMonth} 个本月计薪日</span></div></section>
-            <div className="right-stack"><section className="goal-card"><div className="card-top"><span className="section-label"><Target size={18} />今日小目标</span><button className="icon-button" aria-label="编辑小目标" onClick={() => setGoalOpen(true)}><MoreHorizontal size={19} /></button></div><div className="goal-content"><span className={`goal-icon ${goalProgress >= 1 ? 'complete' : ''}`}>{goalProgress >= 1 ? <Check size={25} /> : <Coffee size={25} />}</span><div><h3>{state.goal.name}</h3><p>{goalProgress >= 1 ? '目标达成！这份快乐，你值得。' : `还差 ${amountText(state.goal.amount - salary.todayEarned)}，小快乐就在前面。`}</p></div></div><div className="goal-progress"><i style={{ width: `${goalProgress * 100}%` }} /></div><div className="goal-caption"><span>{goalProgress >= 1 ? '今日已解锁' : '正在靠近'}</span><strong>{amountText(Math.min(salary.todayEarned, state.goal.amount), 0)} / {amountText(state.goal.amount, 0)}</strong></div></section>{restCard}</div>
           </div>
           
         </>}

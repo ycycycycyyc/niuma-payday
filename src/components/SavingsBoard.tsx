@@ -7,6 +7,7 @@ import type { AppState } from '../lib/store';
 import './savings.css';
 
 type Currency = SavingsEntry['currency'];
+type AllocationField = 'living' | 'saving';
 type BoardProps = {
   state: AppState;
   currentMonth: string;
@@ -33,14 +34,16 @@ function blankDraft(state: AppState, month: string) {
     month, previous, currency,
     salary: previous ? String(previous.salaryCents / 100) : salaryInput.format(state.settings.monthlySalary),
     rent: budget ? String(budget.rentCents / 100) : '',
-    living: budget ? String(budget.livingCents / 100) : '',
+    allocationField: 'living' as AllocationField,
+    allocation: budget ? String(budget.livingCents / 100) : '',
   };
 }
 
 function parseCents(value: string, min: number) {
-  const match = /^(\d+)(?:\.(\d{0,2}))?$/.exec(value.trim());
+  const match = /^(-?)(?:(\d+)(?:\.(\d{0,2}))?|\.(\d{1,2}))$/.exec(value.trim());
   if (!match) return null;
-  const cents = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
+  const absolute = Number(match[2] ?? 0) * 100 + Number((match[3] ?? match[4] ?? '').padEnd(2, '0'));
+  const cents = match[1] === '-' ? -absolute : absolute;
   return Number.isSafeInteger(cents) && cents >= min && cents <= MAX_SAVINGS_CENTS ? cents : null;
 }
 
@@ -56,10 +59,17 @@ function EntryDialog({ state, currentMonth, initialMonth, chooseMonth, onSave, o
   const currency = draft.currency;
   const salaryCents = parseCents(draft.salary, 1);
   const rentCents = parseCents(draft.rent, 0);
-  const livingCents = parseCents(draft.living, 0);
-  const entry = salaryCents !== null && rentCents !== null && livingCents !== null
+  const editingLiving = draft.allocationField === 'living';
+  const entered = parseCents(draft.allocation, editingLiving ? 0 : -2 * MAX_SAVINGS_CENTS);
+  const calculated = salaryCents !== null && rentCents !== null && entered !== null
+    ? salaryCents - rentCents - entered : null;
+  const livingCents = editingLiving ? entered : calculated;
+  const allocationError = !editingLiving && calculated !== null && calculated < 0 ? '本月可存不能超过月薪扣除房租后的金额。'
+    : !editingLiving && calculated !== null && calculated > MAX_SAVINGS_CENTS ? '按此金额计算的生活费超过 10 亿元。' : '';
+  const calculatedText = calculated === null || allocationError ? '' : String(calculated / 100);
+  const entry = salaryCents !== null && rentCents !== null && livingCents !== null && !allocationError
     ? { month: draft.month, currency, salaryCents, rentCents, livingCents } : null;
-  const remaining = entry ? netSavings(entry) : null;
+  const savings = entry ? netSavings(entry) : null;
 
   useEffect(() => {
     const el = dialog.current;
@@ -76,11 +86,15 @@ function EntryDialog({ state, currentMonth, initialMonth, chooseMonth, onSave, o
     const salary = budget ? String(budget.salaryCents / 100)
       : next === state.settings.currency ? salaryInput.format(state.settings.monthlySalary) : '';
     setDraft({ ...draft, currency: next, salary, rent: budget ? String(budget.rentCents / 100) : '',
-      living: budget ? String(budget.livingCents / 100) : '' });
+      allocationField: 'living', allocation: budget ? String(budget.livingCents / 100) : '' });
     setError('');
   }
-  function changeAmount(field: 'salary' | 'rent' | 'living', value: string) {
+  function changeAmount(field: 'salary' | 'rent', value: string) {
     setDraft({ ...draft, [field]: value });
+    setError('');
+  }
+  function changeAllocation(field: AllocationField, value: string) {
+    setDraft({ ...draft, allocationField: field, allocation: value });
     setError('');
   }
   async function submit(event: FormEvent) {
@@ -95,7 +109,7 @@ function EntryDialog({ state, currentMonth, initialMonth, chooseMonth, onSave, o
       return;
     }
     if (!entry) {
-      setError('请填写月薪、房租和生活费。月薪须大于 0，开支可为 0，每项最多两位小数、上限 10 亿元。');
+      if (!allocationError) setError('请填写有效金额，最多保留两位小数。月薪须大于 0，房租和生活费可为 0、上限 10 亿元。');
       return;
     }
     if (isNewCurrent && (currency !== state.settings.currency || draft.salary !== salaryInput.format(state.settings.monthlySalary))) {
@@ -128,19 +142,20 @@ function EntryDialog({ state, currentMonth, initialMonth, chooseMonth, onSave, o
         <label>币种<select aria-label="币种" value={currency} disabled={isNewCurrent} onChange={event => changeCurrency(event.target.value as Currency)}>
           {Object.entries(currencyNames).map(([code, name]) => <option key={code} value={code}>{name} · {code}</option>)}
         </select></label>
-        <label className="savings-salary-field">月薪<input type="number" value={draft.salary} min="0.01" step="0.01" max="1000000000"
+        <label>月薪<input type="number" value={draft.salary} min="0.01" step="0.01" max="1000000000"
           inputMode="decimal" required readOnly={isNewCurrent} onChange={event => changeAmount('salary', event.target.value)} /></label>
         <label>房租<input type="number" inputMode="decimal" value={draft.rent} min="0" step="0.01" max="1000000000"
           required placeholder="填写金额" onChange={event => changeAmount('rent', event.target.value)} /></label>
-        <label>生活费<input type="number" inputMode="decimal" value={draft.living} min="0" step="0.01" max="1000000000"
-          required placeholder="填写金额" onChange={event => changeAmount('living', event.target.value)} /></label>
+        <div className="savings-allocation">
+          <label>生活费<input type="text" inputMode="decimal" value={editingLiving ? draft.allocation : calculatedText}
+            placeholder="填写金额" onChange={event => changeAllocation('living', event.target.value)} /></label>
+          <label>本月可存<input type="text" inputMode="decimal" value={editingLiving ? calculatedText : draft.allocation}
+            placeholder="填写金额" aria-invalid={Boolean(allocationError)} aria-describedby={allocationError ? 'savings-error' : undefined}
+            onChange={event => changeAllocation('saving', event.target.value)} /></label>
+        </div>
       </fieldset>
-      <div className="savings-calculation" aria-live="polite">
-        <div><strong>{remaining !== null && remaining < 0 ? '本月超支' : '本月可存'}</strong><small>月薪 − 房租 − 生活费</small></div>
-        <b>{remaining === null ? '—' : amountLabel(Math.abs(remaining), currency)}</b>
-      </div>
-      {draft.previous && <p className="savings-form-note">保存后将更新这一个月的记录。</p>}
-      {error && <p role="alert" className="savings-error">{error}</p>}
+      {savings !== null && savings < 0 && <p className="savings-overspend" role="status">本月超支 <strong>{amountLabel(-savings, currency)}</strong></p>}
+      {(allocationError || error) && <p id="savings-error" role="alert" className="savings-error">{allocationError || error}</p>}
       <footer><button className="button secondary" type="button" onClick={onClose} disabled={busy}>取消</button>
         <button className="button primary" type="submit" disabled={busy}>{busy ? '保存中…' : draft.previous ? '保存更正' : '确认记入'}<ArrowUpRight size={16} /></button></footer>
     </form>

@@ -10,6 +10,9 @@ test('first setup, ticking earnings, privacy, goals, and reload persistence', as
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('/');
   await expect(page.getByText('体验模式 · 演示数据')).toBeVisible();
+  await expect(page.getByText('今日小目标', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('带薪充电站', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.sidebar')).not.toContainText('生活不止有工作');
   await page.getByRole('button', { name: '设置我的月薪' }).click();
   await page.getByLabel('月薪', { exact: true }).fill('15120');
   await page.getByLabel('上班时间', { exact: true }).fill('09:00');
@@ -21,14 +24,19 @@ test('first setup, ticking earnings, privacy, goals, and reload persistence', as
   await expect(page.locator('.earnings-card .amount-integer')).toHaveText('81');
   await page.getByRole('button', { name: '隐藏金额', exact: true }).click();
   await expect(page.locator('.earnings-card .amount-integer')).toHaveText('••••');
-  await page.getByRole('button', { name: '编辑小目标' }).click();
+  await page.getByRole('button', { name: '快乐实验室' }).click();
+  await page.getByRole('button', { name: '定个小目标' }).click();
   await page.getByLabel('目标名称').fill('电影自由');
   await page.getByLabel('目标金额').fill('99');
   await page.getByRole('button', { name: '就决定是它了' }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
   await page.reload();
-  await expect(page.getByText('电影自由')).toBeVisible();
   await expect(page.locator('.earnings-card .amount-integer')).toHaveText('••••');
   await expect(page.getByText('体验模式 · 演示数据')).toHaveCount(0);
+  await page.getByRole('button', { name: '快乐实验室' }).click();
+  await page.getByRole('button', { name: '定个小目标' }).click();
+  await expect(page.getByLabel('目标名称')).toHaveValue('电影自由');
+  await expect(page.getByLabel('目标金额')).toHaveValue('99');
   expect(errors).toEqual([]);
 });
 

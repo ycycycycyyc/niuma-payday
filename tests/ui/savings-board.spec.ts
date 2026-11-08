@@ -31,6 +31,52 @@ async function storedLedger(page: Page): Promise<Record<string, SavingsEntry>> {
   return page.evaluate(() => JSON.parse(localStorage.getItem('niuma.payday.v3')!).savings ?? {});
 }
 
+test('按分双向换算生活费和可存金额，房租固定，过高目标无法入账，负结余可以保存', async ({ page }) => {
+  await page.goto('/');
+  await board(page).getByRole('button', { name: '前往工资设置' }).click();
+  await configureSalary(page, '10000.55');
+  await board(page).getByRole('button', { name: '记入本月' }).click();
+  const dialog = page.getByRole('dialog');
+  const rent = dialog.getByLabel('房租', { exact: true });
+  const living = dialog.getByLabel('生活费', { exact: true });
+  const savings = dialog.getByLabel('本月可存', { exact: true });
+  await rent.fill('2250.05');
+  await living.fill('3200.22');
+  await expect(savings).toHaveValue('4550.28');
+  await savings.fill('6400.49');
+  await expect(living).toHaveValue('1350.01');
+  await expect(rent).toHaveValue('2250.05');
+
+  await savings.fill('7750.51');
+  await expect(living).toHaveValue('');
+  await expect(dialog.getByText(/本月可存不能超过/)).toBeVisible();
+  const confirm = dialog.getByRole('button', { name: '确认记入' });
+  if (await confirm.isEnabled()) await confirm.click();
+  await expect(dialog).toBeVisible();
+  expect(await storedLedger(page)).toEqual({});
+  await savings.fill('6000.09');
+  await expect(living).toHaveValue('1750.41');
+  await confirm.click();
+  await expect(total(page)).toContainText('6,000.09');
+
+  await page.reload();
+  await board(page).getByRole('button', { name: '更正本月' }).click();
+  await expect(savings).toHaveValue('6000.09');
+  await expect(living).toHaveValue('1750.41');
+  await expect(rent).toHaveValue('2250.05');
+  await savings.fill('-25.09');
+  await expect(living).toHaveValue('7775.59');
+  await expect(rent).toHaveValue('2250.05');
+  await dialog.getByRole('button', { name: '保存更正' }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await expect(total(page)).toContainText(/[−-]¥25\.09/);
+  await expect(board(page)).toContainText('本月超支');
+  expect((await storedLedger(page))[currentMonth]).toMatchObject({
+    salaryCents: 1000055, rentCents: 225005, livingCents: 777559,
+  });
+});
+
 test('跨年补记后沿用预算，记入、更正和重新打开都只统计一次', async ({ page }) => {
   await page.goto('/');
   await board(page).getByRole('button', { name: '前往工资设置' }).click();
@@ -66,6 +112,37 @@ test('跨年补记后沿用预算，记入、更正和重新打开都只统计�
   expect(Object.keys(ledger).sort()).toEqual(['2026-12', currentMonth]);
   expect(ledger['2026-12']).toMatchObject({ salaryCents: 950000, rentCents: 250000, livingCents: 300000 });
   expect(ledger[currentMonth]).toMatchObject({ salaryCents: 1000000, rentCents: 250000, livingCents: 800000 });
+});
+
+test('支出刚好等于月薪时结余为零，仅房租高于月薪一分钱时可记超支', async ({ page }) => {
+  await page.goto('/');
+  await board(page).getByRole('button', { name: '前往工资设置' }).click();
+  await configureSalary(page, '5000');
+  await board(page).getByRole('button', { name: '记入本月' }).click();
+  const dialog = page.getByRole('dialog');
+  const rent = dialog.getByLabel('房租', { exact: true });
+  const living = dialog.getByLabel('生活费', { exact: true });
+  const savings = dialog.getByLabel('本月可存', { exact: true });
+  await rent.fill('3500.01');
+  await living.fill('1499.99');
+  await expect(savings).toHaveValue(/^0(?:\.00)?$/);
+  await dialog.getByRole('button', { name: '确认记入' }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(total(page)).toHaveText('¥0.00');
+  await expect(board(page)).not.toContainText('本月超支');
+
+  await board(page).getByRole('button', { name: '更正本月' }).click();
+  await rent.fill('5000.01');
+  await living.fill('0');
+  await expect(savings).toHaveValue('-0.01');
+  await dialog.getByRole('button', { name: '保存更正' }).click();
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await expect(total(page)).toContainText(/[−-]¥0\.01/);
+  await expect(board(page)).toContainText('本月超支');
+  expect((await storedLedger(page))[currentMonth]).toMatchObject({
+    salaryCents: 500000, rentCents: 500001, livingCents: 0,
+  });
 });
 
 test('旧工资配置升级为空账本，换币后两种币种各自累计，隐藏金额覆盖明细', async ({ page }) => {
