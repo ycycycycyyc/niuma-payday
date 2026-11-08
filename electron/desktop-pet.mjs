@@ -3,7 +3,6 @@ import { BrowserWindow, screen } from 'electron';
 import { petLaneHeight } from '../shared/widget-geometry.mjs';
 import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
 import { createCompanionMotion, stepCompanionMotion } from '../shared/desktop-pet-companion.mjs';
-import { createPetFeeding, stepPetFeeding, petFeedingMenuRect } from '../shared/pet-feeding.mjs';
 
 const BONE_SIZE = 28;
 const FIRST_PAINT_TIMEOUT = 5000;
@@ -22,8 +21,8 @@ function hideSurface(surface) {
   surface.acceptsMouse = false;
 }
 
-// The paint surface stays still. Only the dog and an open food menu accept
-// input; every other part of the desktop remains click-through.
+// Only the companion dog accepts input so she can restore the widget.
+// Chasing and returning dogs stay click-through; feeding belongs to the widget.
 function createSurface(area, root, developmentURL) {
   const createdAt = performance.now();
   const win = new BrowserWindow({
@@ -126,29 +125,6 @@ export class DesktopPet {
     return event.processId === frame.processId && event.frameId === frame.routingId;
   }
 
-  holdsFeedingSurface(event, surface) {
-    if (!['chasing', 'companion'].includes(this.state.phase) || !this.trip?.ready ||
-        !surface.shown || surface.win.isDestroyed()) return false;
-    const frame = surface.win.webContents.mainFrame;
-    return event.processId === frame.processId && event.frameId === frame.routingId;
-  }
-
-  menuGeometry(size = this.trip?.size) {
-    const pet = this.trip?.pet;
-    if (!pet || !size) return null;
-    const display = screen.getDisplayNearestPoint({ x: Math.round(pet.x), y: Math.round(pet.y) });
-    return { displayId: display.id, ...petFeedingMenuRect({
-      x: pet.x - size / 2, y: pet.y - size / 2, width: size, height: size,
-    }, display.workArea) };
-  }
-
-  hitsFoodMenu(cursor, padding = 0) {
-    const rect = this.menuGeometry();
-    return Boolean(rect && this.trip?.menuOpen && cursor.x >= rect.x - padding &&
-      cursor.x < rect.x + rect.width + padding && cursor.y >= rect.y - padding &&
-      cursor.y < rect.y + rect.height + padding);
-  }
-
   overWidgetCard(cursor) {
     const widget = this.getWidget();
     if (!widget || widget.isDestroyed() || !widget.isVisible() || widget.isMinimized()) return false;
@@ -159,41 +135,9 @@ export class DesktopPet {
       cursor.y >= top && cursor.y < bounds.y + bounds.height;
   }
 
-  tickFeeding(cursor, now) {
-    const trip = this.trip;
-    if (!['chasing', 'companion'].includes(this.state.phase)) {
-      trip.feeding = null;
-      trip.menuOpen = false;
-      return false;
-    }
-    if (trip.feeding) {
-      trip.feeding = stepPetFeeding(trip.feeding, now - trip.feedingAt);
-      trip.feedingAt = now;
-      trip.menuOpen = false;
-      if (trip.feeding) return true;
-      // Finishing a meal must not reopen its menu until the pointer leaves her.
-      trip.suppressFoodMenu = true;
-    }
-    // A pursuing dog can overlap the toolbar. Keep the card's controls usable
-    // while leaving feeding available over the rest of the desktop.
-    if (this.overWidgetCard(cursor)) {
-      trip.menuOpen = false;
-      trip.menuUntil = 0;
-      return false;
-    }
-    const hitDog = this.hitsCompanion(cursor);
-    const hitMenu = this.hitsFoodMenu(cursor, 5);
-    if (!hitDog && !hitMenu) trip.suppressFoodMenu = false;
-    if (!trip.suppressFoodMenu && (hitDog || hitMenu)) {
-      trip.menuOpen = true;
-      trip.menuUntil = now + 280;
-    } else if (now >= (trip.menuUntil ?? 0)) trip.menuOpen = false;
-    return Boolean(trip.menuOpen);
-  }
-
   syncPetMouseRegion(cursor) {
-    const canInteract = ['chasing', 'companion'].includes(this.state.phase);
-    const hit = canInteract && !this.overWidgetCard(cursor) && (this.hitsCompanion(cursor) || this.hitsFoodMenu(cursor, 5));
+    const canInteract = this.state.phase === 'companion';
+    const hit = canInteract && !this.overWidgetCard(cursor) && this.hitsCompanion(cursor);
     for (const surface of this.surfaces.values()) {
       if (surface.win.isDestroyed()) continue;
       const b = surface.win.getBounds();
@@ -256,9 +200,6 @@ export class DesktopPet {
     if (this.state.phase !== 'companion' || !this.trip?.suspended) return;
     this.trip.suspended = false;
     this.trip.lastTime = performance.now();
-    if (this.trip.feeding) this.trip.feedingAt = this.trip.lastTime;
-    this.trip.menuOpen = false;
-    this.trip.menuUntil = 0;
     this.tick(screen.getCursorScreenPoint());
     this.companionTimer ??= setInterval(() => this.tick(screen.getCursorScreenPoint()), 24);
   }
@@ -415,17 +356,6 @@ export class DesktopPet {
     contents.ipc.on('niuma:desktop-pet-hold', event => {
       if (this.holdsCompanion(event, surface)) this.trip.holdUntil = performance.now() + 900;
     });
-    contents.ipc.on('niuma:desktop-pet-feed', (event, food) => {
-      if (!this.holdsFeedingSurface(event, surface) || this.trip.feeding || !this.trip.menuOpen ||
-          this.menuGeometry()?.displayId !== display.id) return;
-      const feeding = createPetFeeding(food);
-      if (!feeding) return;
-      this.trip.feeding = feeding;
-      this.trip.feedingAt = performance.now();
-      this.trip.menuOpen = false;
-      this.trip.idleCursor = null;
-      this.tick(screen.getCursorScreenPoint());
-    });
     contents.ipc.on('niuma:desktop-pet-restore-widget', event => {
       if (!this.holdsCompanion(event, surface) || this.restoring) return;
       this.restoring = true;
@@ -465,15 +395,6 @@ export class DesktopPet {
     const trip = this.trip;
     if (!trip?.ready) return;
     if (trip.suspended) return;
-    const now = performance.now();
-    if (this.tickFeeding(cursor, now)) {
-      trip.lastTime = now;
-      trip.idleCursor = null;
-      trip.pet = { ...trip.pet, vx: 0, vy: 0 };
-      this.paint(trip.pet, trip.size, null);
-      this.syncPetMouseRegion(cursor);
-      return;
-    }
     if (this.state.phase === 'companion') {
       try { this.tickCompanion(cursor); } catch (error) {
         console.warn('Unable to animate the companion:', error.message);
@@ -537,10 +458,10 @@ export class DesktopPet {
       const frame = {
         dog: dogHere ? { x: left - bounds.x, y: top - bounds.y, size, facing: pet.facing, pose: pet.pose, frame: pet.frame,
           vx: pet.vx, vy: pet.vy, interactive: this.state.phase === 'companion',
-          feedable: ['chasing', 'companion'].includes(this.state.phase), reducedMotion: Boolean(this.trip?.reduced) } : null,
+          feedable: false, reducedMotion: Boolean(this.trip?.reduced) } : null,
         bone: boneHere ? { x: bone.x - bounds.x, y: bone.y - bounds.y } : null,
-        feeding: dogHere ? this.trip?.feeding ?? null : null,
-        menuOpen: Boolean(dogHere && this.trip?.menuOpen && this.menuGeometry(size)?.displayId === display.id),
+        feeding: null,
+        menuOpen: false,
         ...(surface === handoffSurface ? { handoff: true } : {}),
       };
       const key = JSON.stringify(frame);

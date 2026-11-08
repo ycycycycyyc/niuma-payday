@@ -139,8 +139,8 @@ function clearPath() {
 }
 
 window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen }) => {
-  currentFeeding = feeding ?? null;
-  foodMenuOpen = Boolean(dog && menuOpen && !currentFeeding);
+  currentFeeding = dog?.feedable ? feeding ?? null : null;
+  foodMenuOpen = Boolean(dog?.feedable && menuOpen && !currentFeeding);
   cursorBone.hidden = bone === null;
   if (bone) cursorBone.style.transform = `translate3d(${bone.x}px, ${bone.y}px, 0)`;
   if (!dog) {

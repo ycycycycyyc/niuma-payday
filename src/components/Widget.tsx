@@ -196,7 +196,7 @@ export default function Widget({ state, onRestore, onHide, preview = false, back
 
   return <div className="widget-shell" ref={shell} style={{ width: desktop ? `min(${layout.width}px, 100vw)` : layout.width * scale, height: desktop ? `min(${layout.cardHeight + layout.laneHeight}px, 100dvh)` : (layout.cardHeight + layout.laneHeight) * scale }}>
     <div className="widget-stack" style={{ ...widgetLayoutStyle, zoom: scale }}>
-    <WidgetPet chasing={false} setChasing={bone.change}
+    <WidgetPet chasing={false} feedingEnabled={!bone.chasing} setChasing={bone.change}
       desktopState={bone.state} boneButton={boneButton} preview={preview} />
     {backdrop}
     {hasLensFilter && <LensFilter id={lensId} />}

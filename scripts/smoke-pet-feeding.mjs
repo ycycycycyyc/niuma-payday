@@ -6,7 +6,8 @@ import { _electron as electron, expect } from '@playwright/test';
 import koffi from 'koffi';
 
 // This smoke test owns a separate Electron profile. On Windows it saves and
-// restores the physical cursor, and clicks only a verified visible food button.
+// restores the physical cursor, and clicks only a verified visible food button
+// or the companion dog when checking double-click restoration.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
 const userData = path.join(process.env.NIUMA_SMOKE_DATA_ROOT || artifacts, `pet-feeding-test-${Date.now()}`);
@@ -83,7 +84,7 @@ async function dogPosition(page, selector = '#desktop-dog') {
   return { x: owner.bounds.x + rect.x * owner.zoom, y: owner.bounds.y + rect.y * owner.zoom };
 }
 
-async function openMenu(page, selector = '#desktop-dog') {
+async function openMenu(page, selector = '.widget-dog') {
   const target = await pointAt(page, selector);
   await moveCursor(target);
   await expect.poll(async () => (await nativeWindow(page)).ignoresMouse).toBe(false);
@@ -102,7 +103,7 @@ async function openMenu(page, selector = '#desktop-dog') {
   assert.equal((await page.locator('.pet-food-menu').textContent()).trim(), '');
 }
 
-async function clickFood(page, food, dogSelector = '#desktop-dog') {
+async function clickFood(page, food, dogSelector = '.widget-dog') {
   const selector = `.pet-food-option[data-food="${food}"]`;
   await moveCursor(await pointAt(page, selector));
   await expect(page.locator('.pet-food-menu')).toBeVisible();
@@ -117,12 +118,12 @@ async function clickFood(page, food, dogSelector = '#desktop-dog') {
   await expect(page.locator('.pet-feeding-sprite')).toHaveAttribute('data-food', food);
 }
 
-async function verifyWidgetMeal(page) {
+async function verifyWidgetMeal(page, food = 'kibble') {
   const selector = '.widget-dog';
   await openMenu(page, selector);
-  await page.screenshot({ path: path.join(artifacts, 'pet-feeding-widget-menu.png') });
+  await page.screenshot({ path: path.join(artifacts, `pet-feeding-widget-${food}-menu.png`) });
   const origin = await dogPosition(page, selector);
-  await clickFood(page, 'kibble', selector);
+  await clickFood(page, food, selector);
   const owner = await nativeWindow(page);
   const lane = await page.locator('.widget-pet-lane').boundingBox();
   const clearLane = { x: owner.bounds.x + (lane.x + lane.width - 2) * owner.zoom,
@@ -133,7 +134,7 @@ async function verifyWidgetMeal(page) {
   const eatingPosition = await dogPosition(page, selector);
   assert.ok(Math.hypot(eatingPosition.x - origin.x, eatingPosition.y - origin.y) < 1,
     'Widget dog does not walk away while eating');
-  await page.screenshot({ path: path.join(artifacts, 'pet-feeding-widget-eating.png') });
+  await page.screenshot({ path: path.join(artifacts, `pet-feeding-widget-${food}-eating.png`) });
   await expect(page.locator(selector)).toHaveAttribute('data-feeding', 'false', { timeout: 6500 });
   await expect(page.locator('.pet-feeding-sprite')).toBeHidden();
   await expect.poll(async () => Math.abs((await dogPosition(page, selector)).x - origin.x)).toBeGreaterThan(3);
@@ -141,41 +142,25 @@ async function verifyWidgetMeal(page) {
   await moveCursor(clearLane);
   await expect(page.locator('.pet-food-menu')).toBeHidden({ timeout: 2500 });
   await expect.poll(async () => (await nativeWindow(page)).ignoresMouse).toBe(true);
-  record('widget food menu accepts a physical click, eating completes, transparent lane passes clicks and leaving closes the menu');
+  record(`widget ${food} menu accepts a physical click, eating completes, transparent lane passes clicks and leaving closes the menu`);
 }
 
-async function verifyMeal(page, food, away) {
-  await openMenu(page);
-  await page.screenshot({ path: path.join(artifacts, `pet-feeding-${food}-menu.png`) });
-  const origin = await dogPosition(page);
-  await clickFood(page, food);
-  await moveCursor(away);
-  await expect.poll(async () => (await nativeWindow(page)).ignoresMouse).toBe(true);
-  await page.waitForTimeout(260);
-  assert.ok(Math.hypot((await dogPosition(page)).x - origin.x, (await dogPosition(page)).y - origin.y) < 1,
-    'The dog stays in place while eating');
-  const firstFrame = await page.locator('.pet-feeding-sprite').getAttribute('data-frame');
-  await expect.poll(() => page.locator('.pet-feeding-sprite').getAttribute('data-frame')).not.toBe(firstFrame);
-  await page.evaluate(() => window.petOverlay.feed('invalid'));
-  await page.evaluate(() => window.petOverlay.feed('stick'));
-  await expect(page.locator('.pet-feeding-sprite')).toHaveAttribute('data-food', food);
-  await page.screenshot({ path: path.join(artifacts, `pet-feeding-${food}-eating.png`) });
-  if (food === 'kibble') {
-    await desktop.evaluate(({ powerMonitor }) => powerMonitor.emit('lock-screen'));
-    await expect.poll(async () => (await nativeWindow(page)).visible).toBe(false);
-    await page.waitForTimeout(4500);
-    await desktop.evaluate(({ powerMonitor }) => powerMonitor.emit('unlock-screen'));
-    await expect.poll(async () => (await nativeWindow(page)).visible).toBe(true);
-    await expect(page.locator('#desktop-dog')).toHaveAttribute('data-feeding', 'true');
-    await expect(page.locator('.pet-feeding-sprite')).toHaveAttribute('data-stage', 'eat');
-    record('companion feeding pauses across simulated screen lock and resumes without skipping the meal');
-  }
-  await expect(page.locator('#desktop-dog')).toHaveAttribute('data-feeding', 'false', { timeout: 6500 });
+async function expectNoDesktopFood(page) {
+  await expect(page.locator('#desktop-dog')).toHaveAttribute('data-feedable', 'false');
+  await expect(page.locator('#desktop-dog')).toHaveAttribute('data-feeding', 'false');
+  await expect(page.locator('.pet-food-menu')).toBeHidden();
   await expect(page.locator('.pet-feeding-sprite')).toBeHidden();
-  await expect.poll(async () => {
-    const current = await dogPosition(page);
-    return Math.hypot(current.x - origin.x, current.y - origin.y);
-  }, { timeout: 6500 }).toBeGreaterThan(3);
+}
+
+async function verifyDesktopFeedIgnored(page) {
+  await expectNoDesktopFood(page);
+  await page.evaluate(() => {
+    window.petOverlay.feed('kibble');
+    window.petOverlay.feed('stick');
+    window.petOverlay.feed('invalid');
+  });
+  await page.waitForTimeout(350);
+  await expectNoDesktopFood(page);
 }
 
 async function verify() {
@@ -225,7 +210,15 @@ async function verify() {
   await expect.poll(phase, { timeout: 10000 }).toBe('companion');
   await expect.poll(async () => Boolean(await petPage())).toBe(true);
   let pet = await petPage();
-  await openMenu(pet);
+  await moveCursor(await pointAt(pet, '#desktop-dog'));
+  await expect.poll(async () => (await nativeWindow(pet)).ignoresMouse).toBe(false);
+  await pet.waitForTimeout(120);
+  const held = await dogPosition(pet);
+  await pet.waitForTimeout(280);
+  const paused = await dogPosition(pet);
+  assert.ok(Math.hypot(paused.x - held.x, paused.y - held.y) < 2,
+    'The companion still pauses under the physical cursor');
+  await expectNoDesktopFood(pet);
   await desktop.evaluate(async ({ BrowserWindow }, preload) => {
     const rogue = new BrowserWindow({ show: false,
       webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true } });
@@ -235,30 +228,52 @@ async function verify() {
       await new Promise(resolve => setTimeout(resolve, 100));
     } finally { rogue.destroy(); }
   }, path.join(root, 'electron', 'desktop-pet-preload.cjs'));
-  await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-feeding', 'false');
-  await pet.evaluate(() => window.petOverlay.feed('invalid'));
-  await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-feeding', 'false');
-  record('foreign surfaces and invalid food cannot start a meal');
-  await verifyMeal(pet, 'kibble', away);
+  await verifyDesktopFeedIgnored(pet);
   assert.equal(await phase(), 'companion');
-  record('physical hover and click feed kibble; companion pauses, animates and resumes');
-  record('menu accepts mouse clicks and the surrounding desktop remains click-through');
+  observations.companionHover = { dog: paused, native: await nativeWindow(pet) };
+  record('companion hover pauses without a food menu; owned and foreign feed calls cannot start a meal');
 
-  await main.evaluate(() => window.niuma.showWidget());
-  await expect.poll(phase).toBe('docked');
-  const edge = { x: setup.area.x + setup.area.width - 20, y: setup.area.y + 110 };
+  // The held companion remains the only permitted target for these OS clicks.
+  const companionTarget = await pointAt(pet, '#desktop-dog');
+  const cursor = await desktop.evaluate(({ screen }) => screen.getCursorScreenPoint());
+  assert.ok(Math.hypot(cursor.x - companionTarget.x, cursor.y - companionTarget.y) < 3,
+    'Physical double-click is restricted to the verified companion dog');
+  mouseEvent(0x0002, 0, 0, 0, 0);
+  mouseEvent(0x0004, 0, 0, 0, 0);
+  await pet.waitForTimeout(80);
+  mouseEvent(0x0002, 0, 0, 0, 0);
+  mouseEvent(0x0004, 0, 0, 0, 0);
+  await expect.poll(phase, { timeout: 10000 }).toBe('docked');
+  await expect.poll(async () => (await nativeWindow(widget)).visible).toBe(true);
+  await expect(widget.locator('.widget-dog')).toBeVisible();
+  await openMenu(widget, '.widget-dog');
+  await moveCursor(away);
+  await expect(widget.locator('.pet-food-menu')).toBeHidden();
+  record('physical companion double-click restores the widget and its docked food menu');
+
+  const edge = { x: setup.area.x + setup.area.width - 90, y: setup.area.y + 110 };
   await moveCursor(edge);
   await widget.evaluate(() => window.niuma.setDesktopPetMode({ active: true, reducedMotion: false }));
   await expect.poll(phase).toBe('chasing');
   await expect.poll(async () => Boolean(await petPage())).toBe(true);
   pet = await petPage();
-  await expect(pet.locator('.pet-food-menu')).toBeVisible({ timeout: 10000 });
-  await verifyMeal(pet, 'stick', away);
+  await expect.poll(async () => {
+    const center = await pointAt(pet, '#desktop-dog');
+    return Math.hypot(center.x - (edge.x - 15), center.y - (edge.y + 18));
+  }, { timeout: 15000 }).toBeLessThan(3);
+  await pet.waitForTimeout(450);
+  await expectNoDesktopFood(pet);
+  await expect(pet.locator('#desktop-dog')).toBeDisabled();
+  await expect.poll(async () => (await nativeWindow(pet)).ignoresMouse).toBe(true);
+  await verifyDesktopFeedIgnored(pet);
   assert.equal(await phase(), 'chasing');
-  record('physical stick feeding also works during a chase at the screen edge, then chasing resumes');
+  observations.chaseArrival = { target: edge, dog: await dogPosition(pet), native: await nativeWindow(pet) };
+  record('catching the cursor bone never opens food choices, ignores feed calls and keeps the native surface click-through');
   await widget.evaluate(() => window.niuma.setDesktopPetMode({ active: false, reducedMotion: false }));
+  await expect(pet.locator('.pet-food-menu')).toBeHidden();
   await expect.poll(phase, { timeout: 10000 }).toBe('docked');
-  record('recalling the dog after feeding returns cleanly to the widget');
+  await verifyWidgetMeal(widget, 'stick');
+  record('recalling the chasing dog restores normal docked feeding');
   assert.deepEqual(errors, []);
 }
 

@@ -13,13 +13,14 @@ const actionFrames = { stand: 0, turn: 1, crouch: 2, sit: 3, lift: 4, paw: 5, wa
 type Point = { x: number; y: number };
 type Props = {
   chasing: boolean;
+  feedingEnabled: boolean;
   setChasing: (active: boolean) => void;
   boneButton: RefObject<HTMLButtonElement | null>;
   desktopState: DesktopPetState;
   preview: boolean;
 };
 
-export default function WidgetPet({ chasing, setChasing, boneButton, desktopState, preview }: Props) {
+export default function WidgetPet({ chasing, feedingEnabled, setChasing, boneButton, desktopState, preview }: Props) {
   const laneRef = useRef<HTMLDivElement>(null);
   const dogRef = useRef<HTMLButtonElement>(null);
   const spriteRef = useRef<HTMLSpanElement>(null);
@@ -74,7 +75,7 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
     }
     function openMenu() {
       clearTimeout(closeTimer);
-      if (feeding || suppressMenu || motion.current.handshakeMs !== null) return;
+      if (!feedingEnabled || feeding || suppressMenu || motion.current.handshakeMs !== null) return;
       menuOpen = true;
       // Stop at the current footprint instead of advancing while a click is aimed.
       motion.current = { ...motion.current, speed: 0, turn: null, pose: 'stand', frame: 0 };
@@ -96,7 +97,7 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
     }
     function leaveDog() { suppressMenu = false; leaveMenu(); }
     function feed(food: PetFood) {
-      if (feeding) return;
+      if (!feedingEnabled || feeding) return;
       feeding = createPetFeeding(food);
       if (!feeding) return;
       suppressMenu = true;
@@ -113,7 +114,7 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
         suppressMenu = true;
         closeMenu();
         dog.focus({ preventScroll: true });
-      } else if (event.key === 'ArrowDown' && event.target === dog && !feeding) {
+      } else if (event.key === 'ArrowDown' && event.target === dog && feedingEnabled && !feeding) {
         event.preventDefault();
         suppressMenu = false;
         openMenu();
@@ -298,7 +299,7 @@ export default function WidgetPet({ chasing, setChasing, boneButton, desktopStat
       unsubscribe?.();
       handshake.current = () => {};
     };
-  }, [chasing, setChasing, boneButton, preview, phase, dockX, facing]);
+  }, [chasing, feedingEnabled, setChasing, boneButton, preview, phase, dockX, facing]);
 
   return <>
     <div className="widget-pet-lane" ref={laneRef} data-pet-phase={phase}>

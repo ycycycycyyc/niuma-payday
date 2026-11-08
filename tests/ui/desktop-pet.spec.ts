@@ -311,7 +311,86 @@ test('the desktop surface forwards initial and changed reduced-motion preference
   await expect(page.locator('body')).toHaveAttribute('data-motion-preference', 'false');
 });
 
-test('desktop food options are images and both food choices reach only the pet bridge', async ({ page }) => {
+test('non-feedable chase and companion frames cannot show a food menu or meal', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame(listener) {
+        window.addEventListener('pet-frame', event => listener((event as CustomEvent).detail));
+        return () => {};
+      },
+      firstFramePainted() {}, onPrepare() {}, surfaceReady() {},
+      feed(food) { document.body.dataset.foodChoice = food; },
+    };
+  });
+  await page.goto('/pet.html');
+  const dog = page.locator('#desktop-dog');
+  for (const interactive of [false, true]) {
+    for (const feeding of [null, { food: 'kibble', elapsedMs: 800 }]) {
+      await page.evaluate(({ interactive, feeding }) => {
+        window.dispatchEvent(new CustomEvent('pet-frame', { detail: {
+          sampleTime: performance.now(),
+          dog: { x: 220, y: 250, size: 76, facing: 1, frame: 0, pose: 'stand', vx: 0, vy: 0,
+            interactive, feedable: false },
+          bone: null, menuOpen: true, feeding,
+        } }));
+      }, { interactive, feeding });
+      await page.mouse.move(258, 288);
+      if (interactive) {
+        await dog.focus();
+        await page.keyboard.press('ArrowDown');
+      } else await expect(dog).toBeDisabled();
+      await expect(page.locator('.pet-food-menu')).toBeHidden();
+      await expect(page.locator('.pet-feeding-sprite')).toBeHidden();
+      await expect(dog).toHaveAttribute('data-feeding', 'false');
+    }
+  }
+  expect(await page.locator('body').getAttribute('data-food-choice')).toBeNull();
+});
+
+test('starting a native chase closes the dock food menu before takeoff and restores it after landing', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.addInitScript(() => {
+    const listeners = new Set<(state: DesktopPetState) => void>();
+    window.addEventListener('pet-broadcast', event => {
+      for (const listener of listeners) listener((event as CustomEvent<DesktopPetState>).detail);
+    });
+    Object.defineProperty(window, 'niuma', { value: {
+      platform: 'win32', getState: async () => null, setState: async (value: unknown) => value,
+      onStateChanged: () => () => {},
+      getDesktopPetState: async () => ({ phase: 'docked' }),
+      onDesktopPetState(listener: (state: DesktopPetState) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      // Leave the launch pending to exercise the cold-surface handoff.
+      setDesktopPetMode: () => new Promise<DesktopPetState>(() => {}),
+    } });
+  });
+  await page.goto('/#/widget');
+  const dog = page.locator('.widget-dog');
+  const menu = page.locator('.pet-food-menu');
+  await dog.hover();
+  await expect(menu).toBeVisible();
+  await page.getByRole('button', { name: '拿起骨头', exact: true }).click();
+  await expect(page.locator('.widget-pet-lane')).toHaveAttribute('data-pet-phase', 'docked');
+  await dog.hover();
+  await dog.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(menu).toBeHidden();
+  await expect(dog).toHaveAttribute('aria-expanded', 'false');
+  for (const phase of ['chasing', 'returning', 'companion'] as const) {
+    await page.evaluate(phase => window.dispatchEvent(new CustomEvent('pet-broadcast', { detail: { phase } })), phase);
+    await expect(dog).toBeHidden();
+    await expect(menu).toBeHidden();
+  }
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('pet-broadcast', { detail: { phase: 'docked' } })));
+  await dog.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(menu).toBeVisible();
+  await expect(page.getByRole('button', { name: '喂狗粮', exact: true })).toBeFocused();
+});
+
+test('feedable food frames render images and both food choices reach only the pet bridge', async ({ page }) => {
   await page.addInitScript(() => {
     window.petOverlay = {
       onFrame(listener) {
