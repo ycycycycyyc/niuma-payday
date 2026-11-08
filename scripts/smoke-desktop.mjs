@@ -78,6 +78,21 @@ async function verifyDesktop() {
   assert.equal((await main.evaluate(() => window.niuma.getState())).settings.monthlySalary, 680);
   record('monthly salary form saves through authorized IPC; invalid settings rejected');
 
+  if (!windowsBaseline) {
+    const board = main.getByRole('region', { name: '存钱记录板' });
+    await board.getByRole('button', { name: '记入本月' }).click();
+    const entry = main.getByRole('dialog', { name: '记入本月' });
+    const month = await entry.getByLabel('月份', { exact: true }).inputValue();
+    await entry.getByLabel('房租', { exact: true }).fill('160');
+    await entry.getByLabel('生活费', { exact: true }).fill('200');
+    await entry.getByRole('button', { name: '确认记入' }).click();
+    await expect(board.getByTestId('savings-total')).toHaveText('¥320.00');
+    const profile = JSON.parse(fs.readFileSync(path.join(userData, 'state.json'), 'utf8'));
+    assert.deepEqual(profile.savings[month], { month, currency: 'CNY', salaryCents: 68_000, rentCents: 16_000, livingCents: 20_000 });
+    await main.evaluate(() => window.scrollTo(0, 0));
+    record('savings board records a monthly balance through the native bridge and persists it to disk');
+  }
+
   const appRoot = await desktop.evaluate(({ app }) => app.getAppPath());
   const unauthorized = await desktop.evaluate(async ({ BrowserWindow }, preload) => {
     const rogue = new BrowserWindow({ show: false, webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true } });

@@ -6,7 +6,7 @@
 
 **Mac** 用户可以从苹果菜单打开「关于本机」。如果「芯片」显示 Apple M 系列，选择 `mac-arm64.dmg` 结尾的文件。如果「处理器」显示 Intel，选择 `mac-x64.dmg` 结尾的文件。打开 DMG，把「牛马鼓励器」拖进「应用程序」，然后从那里启动。更新前，先在菜单栏的小牛菜单中选择「退出」。[下载最新版 Mac 安装包](https://github.com/ycycycycyyc/niuma-payday/releases/latest)
 
-**Windows** 用户请先右键任务栏右下角的小牛图标，选择「退出」关掉旧版，再双击新版免安装程序。小牛图标可能收在「显示隐藏的图标」里。[下载 Windows x64 免安装版](https://github.com/ycycycycyyc/niuma-payday/releases/download/desktop-v1.4.0/Niuma-1.4.0-windows-x64-portable.exe)，也可选择[安装版](https://github.com/ycycycycyyc/niuma-payday/releases/download/desktop-v1.4.0/Niuma-1.4.0-windows-x64-setup.exe)。
+**Windows** 用户请先右键任务栏右下角的小牛图标，选择「退出」关掉旧版。小牛图标可能收在「显示隐藏的图标」里。在发布页选择 `windows-x64-portable.exe` 结尾的免安装版，或 `windows-x64-setup.exe` 结尾的安装版。[下载最新版 Windows 程序](https://github.com/ycycycycyyc/niuma-payday/releases/latest)
 
 从源码运行：
 
@@ -18,9 +18,15 @@ npm run setup:desktop
 npm run dev
 ```
 
-首次打开为明确标注的演示模式。点击「设置我的月薪」，填写月薪、上下班时间和节假日地区，再保存。币种支持人民币、港币和美元，仅用于显示，不做汇率换算；币种与日历地区独立，例如港币工资可以搭配中国大陆假期。发薪方式可直接选择，午休安排放在「更多偏好」中。
+首次打开为演示模式。点击「设置我的月薪」，填写月薪、上下班时间和节假日地区，再保存。币种支持人民币、港币和美元，可以独立选择节假日地区，例如港币工资可以搭配中国大陆假期。发薪方式可直接选择，午休安排放在「更多偏好」中。
 
 只预览网页界面可运行 `npm run dev:web`。独立浏览器预览可切换「浮窗」和「主界面」。在浮窗页可切换日光和夜色桌布、拖动玻璃卡片、调整外观，并查看工资、倒计时和小狗互动。运行 `node scripts/build-widget-preview.mjs` 会生成可离线打开的 `artifacts/preview/Niuma-Glass-Preview.html`。系统托盘和跨应用置顶由桌面版提供。
+
+## 存钱记录板
+
+在「薪动时刻」点「记入本月」，填房租和生活费，就能看到本月月薪扣除这两项开支后可存多少钱。点「确认记入」后，这笔结余才计入首页的「累计已存」。如果当月超支，累计会扣除相应金额。
+
+展开「月度明细」可以补记以前的月份，也可以更正已有记录。同一个月只统计一次。新月份会带出最近一次以相同币种记录的房租和生活费，历月保留各自的月薪和支出。人民币、港币和美元分别累计。首页的「隐藏金额」同时遮住预算和明细。
 
 ## 计薪与工作日
 
@@ -68,7 +74,7 @@ npm run dev
 
 ## 数据保存
 
-无需账号。桌面版的工资设置、手动日期安排和日历缓存保存在 Electron `userData` 目录的 `state.json`，浮窗位置、大小、底色和不透明度保存在 `desktop.json`。网页预览使用浏览器本地存储，两者独立。
+无需账号。桌面版的工资设置、月度存钱记录、手动日期安排和日历缓存保存在 Electron `userData` 目录的 `state.json`，浮窗位置、大小、底色和不透明度保存在 `desktop.json`。网页预览使用浏览器本地存储，两者独立。
 
 渲染进程使用沙盒和上下文隔离，关闭 Node.js 集成；桌面操作通过限定的 preload 接口执行，并校验 IPC 请求窗口。
 

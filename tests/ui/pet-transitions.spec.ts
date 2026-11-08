@@ -160,7 +160,7 @@ test('transition poses remain restorable with reduced motion while legacy chasin
   }
   await dog.dblclick();
   await expect(page.locator('body')).toHaveAttribute('data-restores', '1');
-  await expect(page.locator('body')).toHaveAttribute('data-holds', '2');
+  expect(await page.locator('body').getAttribute('data-holds')).toBeNull();
   expect(await dog.boundingBox()).toEqual(logicalBox);
 
   await drawFrame(page, { pose: 'walk', frame: 2, facing: -1, interactive: false, reducedMotion: false });
