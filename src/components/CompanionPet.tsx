@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 import { createCompanionMotion, stepCompanionMotion } from '../../shared/desktop-pet-companion.mjs';
 import { applyPetSprite, loadPetSpriteArtwork } from '../lib/pet-sprite';
+import { createPetRestoreTarget } from '../lib/pet-restore-target';
 import './companion-pet.css';
 
 export type CompanionOrigin = {
@@ -22,11 +23,9 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
     let pet = createCompanionMotion(origin, bounds, size);
     let raf = 0;
     let lastTime: number | null = null;
-    let hovered = false;
-    let heldUntil = 0;
-    let holdTimer: ReturnType<typeof setTimeout> | undefined;
     let decoded = false;
     let disposed = false;
+    const restoreTarget = createPetRestoreTarget(dog);
 
     void loadPetSpriteArtwork().then(ready => {
       if (disposed) return;
@@ -48,6 +47,7 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
       dog.dataset.sheet = description.sheet;
       dog.dataset.reducedMotion = String(quiet.matches);
       dog.hidden = !decoded;
+      restoreTarget.sync();
     }
 
     function wake() {
@@ -57,10 +57,9 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
     function draw(time: number) {
       raf = 0;
       if (document.hidden) return;
-      const paused = hovered || time < heldUntil;
-      pet = stepCompanionMotion(pet, lastTime === null ? 0 : time - lastTime, { bounds, size, paused, reducedMotion: quiet.matches });
+      pet = stepCompanionMotion(pet, lastTime === null ? 0 : time - lastTime, { bounds, size, reducedMotion: quiet.matches });
       paint();
-      if (!paused && !quiet.matches) {
+      if (!quiet.matches) {
         lastTime = time;
         wake();
       } else lastTime = null;
@@ -68,48 +67,30 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
 
     function measure() {
       bounds = { x: 0, y: 0, width: field.clientWidth, height: field.clientHeight };
-      pet = stepCompanionMotion(pet, 0, { bounds, size, paused: hovered || performance.now() < heldUntil, reducedMotion: quiet.matches });
+      pet = stepCompanionMotion(pet, 0, { bounds, size, reducedMotion: quiet.matches });
       lastTime = null;
       paint();
       wake();
     }
 
-    function enter() { hovered = true; wake(); }
-    function leave() { hovered = false; lastTime = null; wake(); }
-    function hold(event: PointerEvent) {
-      if (!event.isPrimary || event.button !== 0) return;
-      heldUntil = performance.now() + 850;
-      clearTimeout(holdTimer);
-      holdTimer = setTimeout(() => { lastTime = null; wake(); }, 860);
-      wake();
-    }
     function visibility() {
       cancelAnimationFrame(raf);
       raf = 0;
       lastTime = null;
+      restoreTarget.clear();
       if (document.hidden) pet = stepCompanionMotion(pet, 0, { bounds, size, paused: true });
-      else {
-        // The pointer may have left while this tab was in the background.
-        hovered = dog.matches(':hover');
-        measure();
-      }
+      else measure();
     }
     const observer = new ResizeObserver(measure);
     observer.observe(field);
-    dog.addEventListener('pointerenter', enter);
-    dog.addEventListener('pointerleave', leave);
-    dog.addEventListener('pointerdown', hold);
     document.addEventListener('visibilitychange', visibility);
     quiet.addEventListener('change', measure);
     measure();
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
-      clearTimeout(holdTimer);
+      restoreTarget.destroy();
       observer.disconnect();
-      dog.removeEventListener('pointerenter', enter);
-      dog.removeEventListener('pointerleave', leave);
-      dog.removeEventListener('pointerdown', hold);
       document.removeEventListener('visibilitychange', visibility);
       quiet.removeEventListener('change', measure);
     };

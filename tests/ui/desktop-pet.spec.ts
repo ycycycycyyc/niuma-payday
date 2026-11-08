@@ -139,7 +139,7 @@ test('only the companion dog accepts double-clicks and keyboard restoration', as
       firstFramePainted() {},
       onPrepare() {},
       surfaceReady() {},
-      hold() { document.body.dataset.holds = String(Number(document.body.dataset.holds ?? 0) + 1); },
+      setRestoreTarget(rect) { document.body.dataset.restoreTarget = rect ? 'active' : 'cleared'; },
       restoreWidget() { document.body.dataset.restores = String(Number(document.body.dataset.restores ?? 0) + 1); },
     };
   });
@@ -153,10 +153,10 @@ test('only the companion dog accepts double-clicks and keyboard restoration', as
   await expect(dog).toHaveCSS('pointer-events', 'auto');
   await expect(page.locator('body')).toHaveCSS('pointer-events', 'none');
   await dog.click();
-  await expect(page.locator('body')).toHaveAttribute('data-holds', '1');
+  await expect(page.locator('body')).toHaveAttribute('data-restore-target', 'active');
   expect(await page.locator('body').getAttribute('data-restores')).toBeNull();
   await dog.dblclick();
-  await expect(page.locator('body')).toHaveAttribute('data-holds', '3');
+  await expect(page.locator('body')).toHaveAttribute('data-restore-target', 'cleared');
   await expect(page.locator('body')).toHaveAttribute('data-restores', '1');
   await dog.focus();
   await page.keyboard.press('Enter');
@@ -169,6 +169,51 @@ test('only the companion dog accepts double-clicks and keyboard restoration', as
   await expect(dog).toHaveCount(0);
   await page.locator('#desktop-dog').dispatchEvent('dblclick');
   await expect(page.locator('body')).toHaveAttribute('data-restores', '3');
+});
+
+test('a moving desktop dog preserves the first click target without pausing and releases it after the gesture', async ({ page }) => {
+  await page.clock.install();
+  await page.addInitScript(() => {
+    window.petOverlay = {
+      onFrame(listener) {
+        window.addEventListener('pet-frame', event => listener((event as CustomEvent).detail));
+        return () => {};
+      },
+      firstFramePainted() {}, onPrepare() {}, surfaceReady() {},
+      setRestoreTarget(rect) { document.body.dataset.restoreTarget = JSON.stringify(rect); },
+      restoreWidget() { document.body.dataset.restores = String(Number(document.body.dataset.restores ?? 0) + 1); },
+    };
+  });
+  await page.goto('/pet.html');
+  const dog = page.locator('#desktop-dog');
+  const target = dog.locator('[data-pet-restore-target]');
+  const frame = (x: number) => page.evaluate(x => window.dispatchEvent(new CustomEvent('pet-frame', {
+    detail: { sampleTime: performance.now(), dog: { x, y: 250, size: 76, facing: 1, frame: 2, pose: 'walk', vx: 58, vy: 0, interactive: true }, bone: null },
+  })), x);
+
+  await frame(220);
+  const initial = (await dog.boundingBox())!;
+  const point = { x: initial.x + 2, y: initial.y + initial.height / 2 };
+  await page.mouse.click(point.x, point.y);
+  const retained = await target.boundingBox();
+  await frame(240);
+  await page.clock.runFor(250);
+  expect((await dog.boundingBox())!.x).toBeGreaterThan(point.x + 10);
+  expect(await target.boundingBox()).toEqual(retained);
+  expect(await page.locator('body').getAttribute('data-restores')).toBeNull();
+  await page.mouse.click(point.x, point.y, { clickCount: 2 });
+  await expect(page.locator('body')).toHaveAttribute('data-restores', '1');
+  await expect(page.locator('body')).toHaveAttribute('data-restore-target', 'null');
+
+  // A single click must not leave an invisible target on the surrounding desktop.
+  const current = (await dog.boundingBox())!;
+  const expiredPoint = { x: current.x + 2, y: current.y + current.height / 2 };
+  await page.mouse.click(expiredPoint.x, expiredPoint.y);
+  await frame(265);
+  await page.clock.runFor(700);
+  await expect(page.locator('body')).toHaveAttribute('data-restore-target', 'null');
+  expect(await page.evaluate(point => document.elementFromPoint(point.x, point.y)?.hasAttribute('data-pet-restore-target') ?? false, expiredPoint)).toBe(false);
+  await expect(page.locator('body')).toHaveAttribute('data-restores', '1');
 });
 
 test('companion artwork includes sleeping poses, all play frames and six transition rows', async ({ page }) => {

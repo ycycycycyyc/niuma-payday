@@ -7,6 +7,7 @@ import { createCompanionMotion, stepCompanionMotion } from '../shared/desktop-pe
 const BONE_SIZE = 28;
 const FIRST_PAINT_TIMEOUT = 5000;
 const COLD_SURFACE_MS = 250;
+const RESTORE_TARGET_MS = 650;
 const intersects = (rect, x, y, size) => x < rect.x + rect.width && x + size > rect.x
   && y < rect.y + rect.height && y + size > rect.y;
 const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
@@ -113,7 +114,6 @@ export class DesktopPet {
     const area = screen.getDisplayNearestPoint({ x: Math.round(trip.pet.x), y: Math.round(trip.pet.y) }).workArea;
     trip.pet = createCompanionMotion(trip.pet, area, trip.size);
     trip.lastTime = performance.now();
-    trip.holdUntil = 0;
     this.publish({ phase: 'companion' });
     this.tick(screen.getCursorScreenPoint());
     this.companionTimer ??= setInterval(() => this.tick(screen.getCursorScreenPoint()), 24);
@@ -123,6 +123,36 @@ export class DesktopPet {
     if (this.state.phase !== 'companion' || !this.trip?.ready || !surface.shown || surface.win.isDestroyed()) return false;
     const frame = surface.win.webContents.mainFrame;
     return event.processId === frame.processId && event.frameId === frame.routingId;
+  }
+
+  setRestoreTarget(event, surface, rect) {
+    if (!this.holdsCompanion(event, surface)) return;
+    if (rect === null) {
+      if (this.trip.restoreTarget?.surface === surface) this.trip.restoreTarget = null;
+      return;
+    }
+    const trip = this.trip;
+    if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
+        Math.abs(rect.width - trip.size) > .1 || Math.abs(rect.height - trip.size) > .1) return;
+    const bounds = surface.win.getContentBounds();
+    const x = bounds.x + rect.x, y = bounds.y + rect.y;
+    if (Math.abs(x + rect.width / 2 - trip.pet.x) > trip.size ||
+        Math.abs(y + rect.height / 2 - trip.pet.y) > trip.size) return;
+    // Keep only the first click's input target still. The dog and its animation
+    // continue moving while Chromium recognizes a second click on that target.
+    trip.restoreTarget = { x, y, width: rect.width, height: rect.height,
+      until: performance.now() + RESTORE_TARGET_MS, surface };
+  }
+
+  hitsRestoreTarget(cursor) {
+    const target = this.trip?.restoreTarget;
+    if (!target) return false;
+    if (performance.now() >= target.until) {
+      this.trip.restoreTarget = null;
+      return false;
+    }
+    return cursor.x >= target.x && cursor.x < target.x + target.width &&
+      cursor.y >= target.y && cursor.y < target.y + target.height;
   }
 
   overWidgetCard(cursor) {
@@ -137,7 +167,8 @@ export class DesktopPet {
 
   syncPetMouseRegion(cursor) {
     const canInteract = this.state.phase === 'companion';
-    const hit = canInteract && !this.overWidgetCard(cursor) && this.hitsCompanion(cursor);
+    const hit = canInteract && !this.overWidgetCard(cursor) &&
+      (this.hitsCompanion(cursor) || this.hitsRestoreTarget(cursor));
     for (const surface of this.surfaces.values()) {
       if (surface.win.isDestroyed()) continue;
       const b = surface.win.getBounds();
@@ -164,12 +195,11 @@ export class DesktopPet {
     const trip = this.trip;
     const now = performance.now();
     const area = screen.getDisplayNearestPoint({ x: Math.round(trip.pet.x), y: Math.round(trip.pet.y) }).workArea;
-    const paused = this.hitsCompanion(cursor) || now < trip.holdUntil;
     trip.pet = stepCompanionMotion(trip.pet, now - trip.lastTime, {
-      bounds: area, size: trip.size, paused, reducedMotion: trip.reduced,
+      bounds: area, size: trip.size, reducedMotion: trip.reduced,
     });
     trip.lastTime = now;
-    this.paint({ ...trip.pet, ...(paused || trip.reduced ? { vx: 0, vy: 0 } : {}) }, trip.size, null);
+    this.paint({ ...trip.pet, ...(trip.reduced ? { vx: 0, vy: 0 } : {}) }, trip.size, null);
     this.syncPetMouseRegion(cursor);
   }
 
@@ -195,6 +225,7 @@ export class DesktopPet {
     clearInterval(this.companionTimer);
     this.companionTimer = undefined;
     this.trip.suspended = true;
+    this.trip.restoreTarget = null;
     for (const surface of this.surfaces.values()) hideSurface(surface);
   }
 
@@ -355,9 +386,7 @@ export class DesktopPet {
     contents.ipc.on('niuma:desktop-pet-first-paint', event => {
       if (fromLaunchSurface(event)) this.trip.confirmFirstFrame?.();
     });
-    contents.ipc.on('niuma:desktop-pet-hold', event => {
-      if (this.holdsCompanion(event, surface)) this.trip.holdUntil = performance.now() + 900;
-    });
+    contents.ipc.on('niuma:desktop-pet-restore-target', (event, rect) => this.setRestoreTarget(event, surface, rect));
     contents.ipc.on('niuma:desktop-pet-restore-widget', event => {
       if (!this.holdsCompanion(event, surface) || this.restoring) return;
       this.restoring = true;

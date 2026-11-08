@@ -1,6 +1,7 @@
 import type { PetFeeding as PetFeedingState, PetFood } from '../shared/pet-feeding.mjs';
 import { createPetFeedingView } from './lib/pet-feeding-view';
 import { applyPetSprite, loadPetSpriteArtwork } from './lib/pet-sprite';
+import { createPetRestoreTarget } from './lib/pet-restore-target';
 import './desktop-pet.css';
 
 type Point = { x: number; y: number };
@@ -22,7 +23,7 @@ declare global {
       onPrepare(listener: () => void): void;
       surfaceReady(): void;
       restoreWidget?(): void;
-      hold?(): void;
+      setRestoreTarget?(rect: { x: number; y: number; width: number; height: number } | null): void;
       feed?(food: PetFood): void;
       setReducedMotion?(reduced: boolean): void;
     };
@@ -50,12 +51,17 @@ reportMotionPreference();
 motionPreference.addEventListener('change', reportMotionPreference);
 
 const isInteractive = () => !sprite.hidden && sprite.dataset.interactive === 'true';
-function restoreWidget() {
-  if (isInteractive()) window.petOverlay?.restoreWidget?.();
-}
-sprite.addEventListener('pointerdown', event => {
-  if (isInteractive() && event.isPrimary && event.button === 0) window.petOverlay?.hold?.();
+const restoreTarget = createPetRestoreTarget(sprite, {
+  enabled: isInteractive,
+  onChange: rect => window.petOverlay?.setRestoreTarget?.(rect),
 });
+window.addEventListener('pagehide', () => restoreTarget.destroy(), { once: true });
+function restoreWidget() {
+  if (isInteractive()) {
+    restoreTarget.clear();
+    window.petOverlay?.restoreWidget?.();
+  }
+}
 sprite.addEventListener('dblclick', event => {
   event.preventDefault();
   restoreWidget();
@@ -105,6 +111,7 @@ function paint(dog: Dog, x: number, y: number) {
   sprite.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   sprite.dataset.feeding = String(Boolean(currentFeeding));
   sprite.hidden = false;
+  restoreTarget.sync();
   foodView.render({
     anchor: { x, y, width: dog.size, height: dog.size },
     bounds: { x: 0, y: 0, width: innerWidth, height: innerHeight },
@@ -147,6 +154,7 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen 
     handoffSerial++;
     clearPath();
     sprite.hidden = true;
+    restoreTarget.clear();
     sprite.dataset.interactive = 'false';
     sprite.dataset.feedable = 'false';
     sprite.dataset.feeding = 'false';
@@ -162,6 +170,7 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen 
   // Switch hit and keyboard affordances immediately, even when a walking frame
   // is briefly buffered for smooth movement.
   sprite.dataset.interactive = String(Boolean(dog.interactive));
+  if (!dog.interactive) restoreTarget.clear();
   sprite.dataset.feedable = String(Boolean(dog.feedable));
   sprite.dataset.reducedMotion = String(Boolean(dog.reducedMotion) || motionPreference.matches);
   const acceptsInput = Boolean(dog.interactive || dog.feedable);

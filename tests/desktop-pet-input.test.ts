@@ -21,13 +21,15 @@ hook.deregister();
 function companion(size = 76) {
   const pet = new DesktopPet({ getWidget: () => null });
   pet.state = { phase: 'companion' };
-  pet.trip = { size, pet: { x: -500, y: 200 }, holdUntil: 0 };
+  pet.trip = { size, pet: { x: -500, y: 200 }, ready: true };
   const input: boolean[] = [];
   const surface = {
     shown: true, acceptsMouse: false,
     win: {
       isDestroyed: () => false,
       getBounds: () => bounds,
+      getContentBounds: () => bounds,
+      webContents: { mainFrame: { processId: 7, routingId: 8 } },
       setIgnoreMouseEvents: (value: boolean) => { input.push(value); },
     },
   };
@@ -45,7 +47,7 @@ test('native input accepts feet and the whole painted button at different scales
       ['upper corner', -.48, -.48],
     ] as const) {
       const cursor = { x: -500 + dx * size, y: 200 + dy * size };
-      assert.equal(pet.hitsCompanion(cursor), true, `${label} at size ${size} must pause movement`);
+      assert.equal(pet.hitsCompanion(cursor), true, `${label} at size ${size} must accept clicks`);
       pet.syncPetMouseRegion(cursor);
       assert.equal(surface.acceptsMouse, true, `${label} at size ${size} must receive both clicks`);
     }
@@ -75,12 +77,48 @@ test('click-through is restored when the dog stops owning input or its surface i
   assert.equal(input.at(-1), true);
 });
 
-test('hovering the grounded feet holds a walking dog still for a double-click', () => {
-  const { pet } = companion();
+test('hovering or starting a double-click at the feet does not interrupt a walking dog', () => {
+  const { pet, surface } = companion();
   pet.trip.pet = createCompanionMotion({ x: -500, y: 200, facing: 1, pose: 'walk', frame: 2 }, bounds, 76);
   const start = { x: pet.trip.pet.x, y: pet.trip.pet.y };
   pet.trip.lastTime = performance.now() - 100;
   pet.paint = () => {};
+  pet.setRestoreTarget({ processId: 7, frameId: 8 }, surface, { x: 1462, y: 1362, width: 76, height: 76 });
   pet.tickCompanion({ x: start.x, y: start.y + .48 * 76 });
-  assert.deepEqual({ x: pet.trip.pet.x, y: pet.trip.pet.y }, start);
+  assert.ok(pet.trip.pet.x > start.x, 'walking continues while the pointer is over the feet');
+  assert.equal(pet.trip.pet.y, start.y);
+  assert.ok(pet.trip.pet.vx > 0, 'the next painted frame keeps its walking velocity');
+});
+
+test('the first click target keeps accepting a second click as the dog moves, then expires', () => {
+  const { pet, surface } = companion();
+  pet.setRestoreTarget({ processId: 7, frameId: 8 }, surface, { x: 1462, y: 1362, width: 76, height: 76 });
+  const firstClick = { x: -536, y: 200 };
+  pet.trip.pet.x += 30;
+  assert.equal(pet.hitsCompanion(firstClick), false, 'the walking dog has left the first click');
+  pet.syncPetMouseRegion(firstClick);
+  assert.equal(surface.acceptsMouse, true, 'the stationary input target receives the second click');
+  pet.trip.restoreTarget.until = performance.now() - 1;
+  pet.syncPetMouseRegion(firstClick);
+  assert.equal(surface.acceptsMouse, false, 'expired input targets release the surrounding desktop');
+  assert.equal(pet.trip.restoreTarget, null);
+});
+
+test('only an owned companion surface can retain its current dog-sized input target', () => {
+  const { pet, surface } = companion();
+  const event = { processId: 7, frameId: 8 };
+  const rect = { x: 1462, y: 1362, width: 76, height: 76 };
+  for (const [sender, target] of [
+    [{ ...event, frameId: 9 }, rect],
+    [event, { ...rect, width: 2000 }],
+    [event, { ...rect, x: 0 }],
+    [event, { ...rect, y: NaN }],
+  ]) {
+    pet.setRestoreTarget(sender, surface, target);
+    assert.equal(pet.trip.restoreTarget, undefined);
+  }
+  pet.setRestoreTarget(event, surface, rect);
+  assert.ok(pet.trip.restoreTarget);
+  pet.setRestoreTarget(event, surface, null);
+  assert.equal(pet.trip.restoreTarget, null);
 });
