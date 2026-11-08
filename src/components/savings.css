@@ -40,7 +40,7 @@
 .savings-balance > strong {
   display: block;
   margin: 5px 0 7px;
-  font: 550 clamp(32px, 5.2cqi, 56px)/1.12 "Aptos Display", "Segoe UI", sans-serif;
+  font: 550 clamp(38px, 8cqi, 60px)/1.12 "Aptos Display", "Segoe UI", sans-serif;
   font-variant-numeric: tabular-nums;
   letter-spacing: -.055em;
   overflow-wrap: anywhere;
