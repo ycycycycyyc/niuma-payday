@@ -172,7 +172,7 @@ async function verify() {
     const rogue = new BrowserWindow({ show: false, webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     try {
       await rogue.loadURL('about:blank');
-      await rogue.webContents.executeJavaScript('window.petOverlay.restoreWidget(); window.petOverlay.hold(); window.petOverlay.setReducedMotion(true);');
+      await rogue.webContents.executeJavaScript('window.petOverlay.restoreWidget(); window.petOverlay.setRestoreTarget({ x: 0, y: 0, width: 76, height: 76 }); window.petOverlay.setReducedMotion(true);');
       await new Promise(resolve => setTimeout(resolve, 80));
     } finally { rogue.destroy(); }
   }, path.join(root, 'electron', 'desktop-pet-preload.cjs'));
