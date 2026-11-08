@@ -153,9 +153,11 @@ export class DesktopPet {
   hitsCompanion(cursor) {
     const trip = this.trip;
     if (!trip?.pet || !trip.size) return false;
-    const u = (cursor.x - trip.pet.x) / trip.size;
-    const v = (cursor.y - trip.pet.y) / trip.size;
-    return u * u + v * v <= .46 * .46;
+    // Match the renderer's square button. Grounded feet reach 98% of its
+    // height, outside the old circular hit area, so those clicks fell through.
+    const half = trip.size / 2;
+    return cursor.x >= trip.pet.x - half && cursor.x < trip.pet.x + half &&
+      cursor.y >= trip.pet.y - half && cursor.y < trip.pet.y + half;
   }
 
   tickCompanion(cursor) {

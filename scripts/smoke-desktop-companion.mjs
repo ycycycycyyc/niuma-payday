@@ -83,11 +83,14 @@ async function minimize() {
   return dog;
 }
 
-async function restoreByDoubleClick() {
+async function restoreByDoubleClick(position) {
   const { page } = await companionDog();
-  // Dispatching does not move or click the user's physical system cursor.
-  await page.locator('#desktop-dog').dispatchEvent('pointerdown', { button: 0, isPrimary: true });
-  await page.locator('#desktop-dog').dispatchEvent('dblclick');
+  // Renderer mouse input does not move the user's physical system cursor.
+  if (position) await page.locator('#desktop-dog').dblclick({ position });
+  else {
+    await page.locator('#desktop-dog').dispatchEvent('pointerdown', { button: 0, isPrimary: true });
+    await page.locator('#desktop-dog').dispatchEvent('dblclick');
+  }
   await expect.poll(async () => (await widgetWindow())?.visible, { timeout: 10_000 }).toBe(true);
   await expect.poll(phase).toBe('docked');
   await expect.poll(async () => (await paintedDogs()).length).toBe(1);
@@ -186,6 +189,16 @@ async function verify() {
     await restoreByDoubleClick();
   }
   record('repeated minimize/restore cycles leave no duplicate dog or visible paint surface');
+
+  for (const [label, x, y] of [['feet', 38, 74], ['left toes', 15, 73], ['right toes', 61, 73], ['upper corner', 2, 2]]) {
+    const dog = await minimize();
+    await dog.page.evaluate(() => window.petOverlay.setReducedMotion(true));
+    await expect.poll(async () => dog.page.locator('#desktop-dog').getAttribute('data-reduced-motion')).toBe('true');
+    const size = (await dog.page.locator('#desktop-dog').boundingBox()).width;
+    await restoreByDoubleClick({ x: x * size / 76, y: y * size / 76 });
+    assert.deepEqual((await widgetWindow()).bounds, originalBounds);
+    record(`double-clicking the ${label} restores exactly one widget at its saved position`);
+  }
 
   await widget.evaluate(() => window.niuma.setDesktopPetMode({ active: true, reducedMotion: false }));
   await expect.poll(phase).toBe('chasing');
