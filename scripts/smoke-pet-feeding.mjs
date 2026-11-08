@@ -84,6 +84,16 @@ async function dogPosition(page, selector = '#desktop-dog') {
   return { x: owner.bounds.x + rect.x * owner.zoom, y: owner.bounds.y + rect.y * owner.zoom };
 }
 
+async function cursorHitsCompanion(page) {
+  const owner = await nativeWindow(page);
+  if (!owner?.visible || owner.ignoresMouse !== false) return false;
+  const cursor = await desktop.evaluate(({ screen }) => screen.getCursorScreenPoint());
+  return page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('#desktop-dog')), {
+    x: (cursor.x - owner.bounds.x) / owner.zoom,
+    y: (cursor.y - owner.bounds.y) / owner.zoom,
+  });
+}
+
 async function openMenu(page, selector = '.widget-dog') {
   const target = await pointAt(page, selector);
   await moveCursor(target);
@@ -210,14 +220,14 @@ async function verify() {
   await expect.poll(phase, { timeout: 10000 }).toBe('companion');
   await expect.poll(async () => Boolean(await petPage())).toBe(true);
   let pet = await petPage();
+  await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-pose', 'walk', { timeout: 10000 });
   await moveCursor(await pointAt(pet, '#desktop-dog'));
   await expect.poll(async () => (await nativeWindow(pet)).ignoresMouse).toBe(false);
-  await pet.waitForTimeout(120);
-  const held = await dogPosition(pet);
-  await pet.waitForTimeout(280);
-  const paused = await dogPosition(pet);
-  assert.ok(Math.hypot(paused.x - held.x, paused.y - held.y) < 2,
-    'The companion still pauses under the physical cursor');
+  const start = await dogPosition(pet);
+  await expect.poll(async () => {
+    const dog = await dogPosition(pet);
+    return Math.hypot(dog.x - start.x, dog.y - start.y);
+  }, { intervals: [32, 64, 100], timeout: 6000 }).toBeGreaterThan(2);
   await expectNoDesktopFood(pet);
   await desktop.evaluate(async ({ BrowserWindow }, preload) => {
     const rogue = new BrowserWindow({ show: false,
@@ -230,17 +240,18 @@ async function verify() {
   }, path.join(root, 'electron', 'desktop-pet-preload.cjs'));
   await verifyDesktopFeedIgnored(pet);
   assert.equal(await phase(), 'companion');
-  observations.companionHover = { dog: paused, native: await nativeWindow(pet) };
-  record('companion hover pauses without a food menu; owned and foreign feed calls cannot start a meal');
+  observations.companionHover = { start, dog: await dogPosition(pet), native: await nativeWindow(pet) };
+  record('companion keeps moving on hover without a food menu; owned and foreign feed calls cannot start a meal');
 
-  // The held companion remains the only permitted target for these OS clicks.
-  const companionTarget = await pointAt(pet, '#desktop-dog');
-  const cursor = await desktop.evaluate(({ screen }) => screen.getCursorScreenPoint());
-  assert.ok(Math.hypot(cursor.x - companionTarget.x, cursor.y - companionTarget.y) < 3,
-    'Physical double-click is restricted to the verified companion dog');
+  // Reacquire the moving dog, then keep the physical pointer at the first click's location.
+  await expect.poll(async () => {
+    await moveCursor(await pointAt(pet, '#desktop-dog'));
+    return cursorHitsCompanion(pet);
+  }).toBe(true);
   mouseEvent(0x0002, 0, 0, 0, 0);
   mouseEvent(0x0004, 0, 0, 0, 0);
   await pet.waitForTimeout(80);
+  assert.ok(await cursorHitsCompanion(pet), 'Second OS click must still hit the companion restore target');
   mouseEvent(0x0002, 0, 0, 0, 0);
   mouseEvent(0x0004, 0, 0, 0, 0);
   await expect.poll(phase, { timeout: 10000 }).toBe('docked');

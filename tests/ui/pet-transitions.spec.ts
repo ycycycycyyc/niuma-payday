@@ -28,7 +28,10 @@ async function openSurface(page: Page) {
         return () => window.removeEventListener('pet-frame', forward);
       },
       firstFramePainted() {}, onPrepare() {}, surfaceReady() {},
-      hold() { document.body.dataset.holds = String(Number(document.body.dataset.holds ?? 0) + 1); },
+      setRestoreTarget(rect) {
+        if (rect) document.body.dataset.firstHit = JSON.stringify(rect);
+        document.body.dataset.restoreTarget = rect ? 'active' : 'cleared';
+      },
       restoreWidget() { document.body.dataset.restores = String(Number(document.body.dataset.restores ?? 0) + 1); },
       setReducedMotion(value) { document.body.dataset.motionPreference = String(value); },
     };
@@ -160,7 +163,8 @@ test('transition poses remain restorable with reduced motion while legacy chasin
   }
   await dog.dblclick();
   await expect(page.locator('body')).toHaveAttribute('data-restores', '1');
-  expect(await page.locator('body').getAttribute('data-holds')).toBeNull();
+  await expect(page.locator('body')).toHaveAttribute('data-first-hit', JSON.stringify(logicalBox));
+  await expect(page.locator('body')).toHaveAttribute('data-restore-target', 'cleared');
   expect(await dog.boundingBox()).toEqual(logicalBox);
 
   await drawFrame(page, { pose: 'walk', frame: 2, facing: -1, interactive: false, reducedMotion: false });
