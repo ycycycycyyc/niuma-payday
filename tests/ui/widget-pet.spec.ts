@@ -251,8 +251,86 @@ test('hovering pauses the dog and offers image-only food choices that play a ful
   await page.clock.runFor(32);
   await expect(menu).toBeVisible();
   await page.mouse.move(cardBefore.x + 180, cardBefore.y + 120);
-  await page.clock.runFor(350);
+  expect(await menu.isHidden()).toBe(true);
+  await page.clock.runFor(32);
   await expect(menu).toBeHidden();
+});
+
+test('leaving the dog dismisses food choices immediately and resumes patrol within the next frames', async ({ page }) => {
+  const dog = page.getByRole('button', { name: '和狗狗握手' });
+  const menu = page.locator('.pet-food-menu');
+  const card = await box(page.getByRole('region', { name: '工资悬浮窗' }));
+  await dog.hover();
+  await page.clock.runFor(32);
+  await expect(menu).toBeVisible();
+  const stopped = await box(dog);
+  await page.mouse.move(card.x + 180, card.y + 120);
+  // The paused clock has not advanced a frame or a 240 ms close timer.
+  expect(await menu.isHidden()).toBe(true);
+  await expect(dog).toHaveAttribute('aria-expanded', 'false');
+  await page.clock.runFor(32);
+  expect(Number(await dog.getAttribute('data-speed'))).toBeGreaterThan(0);
+  await page.clock.runFor(32);
+  expect(Math.abs((await box(dog)).x - stopped.x)).toBeGreaterThan(0.1);
+});
+
+test('crossing the short gap from the dog to its food menu keeps the choices usable', async ({ page }) => {
+  const dog = page.getByRole('button', { name: '和狗狗握手' });
+  const menu = page.locator('.pet-food-menu');
+  await dog.hover();
+  await page.clock.runFor(32);
+  const paused = await box(dog);
+  const choices = await box(menu);
+  const gapX = choices.x >= paused.x + paused.width
+    ? (paused.x + paused.width + choices.x) / 2
+    : (choices.x + choices.width + paused.x) / 2;
+  const gapY = (Math.max(paused.y, choices.y) + Math.min(paused.y + paused.height, choices.y + choices.height)) / 2;
+  await page.mouse.move(paused.x + paused.width / 2, gapY);
+  await page.mouse.move(gapX, gapY);
+  await page.clock.runFor(64);
+  await expect(menu).toBeVisible();
+  expect(await box(dog)).toEqual(paused);
+  await page.getByRole('button', { name: '喂棒棒', exact: true }).click();
+  await page.clock.runFor(32);
+  await expect(menu).toBeHidden();
+  await expect(dog).toHaveAttribute('data-feeding', 'true');
+  await expect(page.locator('.pet-feeding-sprite')).toHaveAttribute('data-food', 'stick');
+});
+
+test('native pointer updates dismiss the menu on the first outside sample and release its reported hit area', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'niuma', { value: {
+      platform: 'win32', getState: async () => null, setState: async (value: unknown) => value,
+      onStateChanged: () => () => {},
+      setWidgetPet(state: { menu: unknown }) { document.body.dataset.reportedMenu = JSON.stringify(state.menu); },
+      onWidgetPointer(listener: (point: { x: number; y: number }) => void) {
+        const receive = (event: Event) => listener((event as CustomEvent).detail);
+        window.addEventListener('test-widget-pointer', receive);
+        return () => window.removeEventListener('test-widget-pointer', receive);
+      },
+    } });
+  });
+  // A new query forces a full navigation so the native bridge init script runs.
+  await page.goto('/?native-pointer-test#/widget');
+  const dog = page.getByRole('button', { name: '和狗狗握手' });
+  const menu = page.locator('.pet-food-menu');
+  await dog.hover();
+  await page.clock.runFor(32);
+  await expect(menu).toBeVisible();
+  expect(JSON.parse(await page.locator('body').getAttribute('data-reported-menu') ?? 'null')).toMatchObject({
+    left: expect.any(Number), top: expect.any(Number), width: expect.any(Number), height: expect.any(Number),
+  });
+  const card = await box(page.getByRole('region', { name: '工资悬浮窗' }));
+  const stopped = await box(dog);
+  for (let sample = 0; sample < 4; sample++) {
+    await page.evaluate(point => window.dispatchEvent(new CustomEvent('test-widget-pointer', { detail: point })),
+      { x: card.x + 160 + sample * 8, y: card.y + 120 });
+    // Continuing 24 ms samples must never defer closure until the pointer rests.
+    expect(await menu.isHidden()).toBe(true);
+    expect(await page.locator('body').getAttribute('data-reported-menu')).toBe('null');
+    await page.clock.runFor(24);
+  }
+  expect(Math.abs((await box(dog)).x - stopped.x)).toBeGreaterThan(0.1);
 });
 
 test('food options work with the keyboard, reduced motion and a narrow window edge', async ({ page }) => {
@@ -282,6 +360,13 @@ test('food options work with the keyboard, reduced motion and a narrow window ed
   await page.clock.runFor(2800);
   await expect(eating).toBeHidden();
   await expect(dog).toHaveAttribute('data-pose', 'stand');
+  await dog.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('button', { name: '喂狗粮', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: '喂棒棒', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  expect(await menu.isHidden()).toBe(true);
 });
 
 test('reduced motion keeps the dog steady, keyboard handshake works and dragging still respects the narrow screen', async ({ page }) => {

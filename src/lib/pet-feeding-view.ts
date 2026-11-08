@@ -8,7 +8,7 @@ for (const src of [feedingArtwork, foodArtwork]) {
   image.src = src;
 }
 
-type Options = { onFeed(food: PetFood): void; onMenuEnter(): void; onMenuLeave(): void };
+type Options = { onFeed(food: PetFood): void; onMenuEnter(): void; onMenuLeave(event: PointerEvent | FocusEvent): void };
 type Frame = {
   anchor: PetFeedingRect; bounds: PetFeedingRect; facing: 1 | -1;
   feeding: PetFeeding | null; open: boolean; reducedMotion: boolean;
@@ -41,7 +41,7 @@ export function createPetFeedingView(parent: HTMLElement, options: Options) {
   menu.addEventListener('pointerleave', options.onMenuLeave);
   menu.addEventListener('focusin', options.onMenuEnter);
   menu.addEventListener('focusout', event => {
-    if (!menu.contains(event.relatedTarget as Node | null)) options.onMenuLeave();
+    if (!menu.contains(event.relatedTarget as Node | null)) options.onMenuLeave(event);
   });
   const sprite = document.createElement('span');
   sprite.className = 'pet-feeding-sprite';

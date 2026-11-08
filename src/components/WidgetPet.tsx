@@ -58,23 +58,22 @@ export default function WidgetPet({ chasing, feedingEnabled, setChasing, boneBut
     let reportedMenu = '';
     let menuOpen = false;
     let feeding: PetFeeding | null = null;
-    let closeTimer: ReturnType<typeof setTimeout> | undefined;
-    let hovered = false;
     let suppressMenu = false;
     const foodView = createPetFeedingView(lane, {
       onFeed: feed,
-      onMenuEnter: enterMenu,
+      onMenuEnter: () => {},
       onMenuLeave: leaveMenu,
     });
 
     function closeMenu() {
-      clearTimeout(closeTimer);
       menuOpen = false;
       dog.setAttribute('aria-expanded', 'false');
+      renderFood();
+      const pet = motion.current;
+      syncHitArea(performance.now(), true, pet.pose === 'walk' ? pet.frame : actionFrames[pet.pose]);
       wake();
     }
     function openMenu() {
-      clearTimeout(closeTimer);
       if (!feedingEnabled || feeding || suppressMenu || motion.current.handshakeMs !== null) return;
       menuOpen = true;
       // Stop at the current footprint instead of advancing while a click is aimed.
@@ -82,20 +81,29 @@ export default function WidgetPet({ chasing, feedingEnabled, setChasing, boneBut
       dog.setAttribute('aria-expanded', 'true');
       wake();
     }
-    function enterMenu() { hovered = true; clearTimeout(closeTimer); }
-    function leaveMenu() {
-      hovered = false;
-      clearTimeout(closeTimer);
-      closeTimer = setTimeout(() => {
-        if (!hovered && !lane.querySelector(':focus-visible')) closeMenu();
-      }, 240);
+    function overFoodControls(point: Point) {
+      const bounds = dog.getBoundingClientRect();
+      const menu = foodView.menu.getBoundingClientRect();
+      if ([bounds, menu].some(rect => point.x >= rect.left && point.x < rect.right &&
+          point.y >= rect.top && point.y < rect.bottom)) return true;
+      // Keep only the short corridor between the dog and the menu interactive,
+      // so moving toward food never requires a delayed close everywhere else.
+      const left = Math.min(bounds.right, menu.right), right = Math.max(bounds.left, menu.left);
+      return left <= right && point.x >= left && point.x <= right &&
+        point.y >= Math.max(bounds.top, menu.top) && point.y < Math.min(bounds.bottom, menu.bottom);
+    }
+    function leaveMenu(event?: PointerEvent | FocusEvent) {
+      if (!menuOpen) return;
+      const next = event?.relatedTarget;
+      if (next instanceof Node && (dog.contains(next) || foodView.menu.contains(next))) return;
+      if (event instanceof PointerEvent && menuOpen && overFoodControls({ x: event.clientX, y: event.clientY })) return;
+      if (!lane.querySelector(':focus-visible')) closeMenu();
     }
     function enterDog() {
-      hovered = true;
       if (!feeding) suppressMenu = false;
       openMenu();
     }
-    function leaveDog() { suppressMenu = false; leaveMenu(); }
+    function leaveDog(event: PointerEvent) { suppressMenu = false; leaveMenu(event); }
     function feed(food: PetFood) {
       if (!feedingEnabled || feeding) return;
       feeding = createPetFeeding(food);
@@ -210,14 +218,7 @@ export default function WidgetPet({ chasing, feedingEnabled, setChasing, boneBut
     }
     function movePointer(point: Point) {
       pointer = point;
-      if (menuOpen && bridge) {
-        const bounds = dog.getBoundingClientRect();
-        const menu = foodView.menu.getBoundingClientRect();
-        const inside = [bounds, menu].some(rect => point.x >= rect.left - 5 && point.x <= rect.right + 5
-          && point.y >= rect.top - 5 && point.y <= rect.bottom + 5);
-        if (inside) enterMenu();
-        else leaveMenu();
-      }
+      if (menuOpen && !overFoodControls(point)) leaveMenu();
       if (bone) {
         const visible = point.x >= 0 && point.y >= 0 && point.x < innerWidth && point.y < innerHeight;
         bone.hidden = !visible;
@@ -229,8 +230,15 @@ export default function WidgetPet({ chasing, feedingEnabled, setChasing, boneBut
       }
       wake();
     }
-    const onPointer = (e: PointerEvent) => movePointer({ x: e.clientX, y: e.clientY });
-    const onPointerOut = (e: PointerEvent) => { if (!e.relatedTarget && bone) bone.hidden = true; };
+    const onPointer = (event: PointerEvent) => {
+      if (chasing || menuOpen) movePointer({ x: event.clientX, y: event.clientY });
+    };
+    const onPointerOut = (event: PointerEvent) => {
+      if (!event.relatedTarget) {
+        if (bone) bone.hidden = true;
+        leaveMenu();
+      }
+    };
     function visibility() {
       cancelAnimationFrame(raf);
       raf = 0;
@@ -259,13 +267,13 @@ export default function WidgetPet({ chasing, feedingEnabled, setChasing, boneBut
     document.addEventListener('visibilitychange', visibility);
     quiet.addEventListener('change', measure);
     let unsubscribe: (() => void) | undefined;
+    // Native drag regions swallow DOM pointer moves; the widget supplies its local coordinates.
     if (bridge) unsubscribe = bridge.onWidgetPointer(movePointer);
+    if (!bridge) {
+      window.addEventListener('pointermove', onPointer, true);
+      window.addEventListener('pointerout', onPointerOut, true);
+    }
     if (chasing) {
-      // Native drag regions swallow DOM pointer moves; the widget supplies its local coordinates.
-      if (!bridge) {
-        window.addEventListener('pointermove', onPointer, true);
-        window.addEventListener('pointerout', onPointerOut, true);
-      }
       const button = boneButton.current?.getBoundingClientRect();
       if (button) movePointer({ x: button.left + button.width / 2, y: button.top + button.height / 2 });
     }
@@ -281,7 +289,6 @@ export default function WidgetPet({ chasing, feedingEnabled, setChasing, boneBut
     cancelAnimationFrame(raf);
     draw(performance.now());
     return () => {
-      clearTimeout(closeTimer);
       foodView.destroy();
       dog.dataset.feeding = 'false';
       dog.setAttribute('aria-expanded', 'false');
