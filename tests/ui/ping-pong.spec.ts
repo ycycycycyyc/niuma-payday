@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { newPongGame, normalizePongSave, PADDLE_HEIGHT, PONG_CANVAS, projectPong, servePong, stepPong } from '../../src/lib/ping-pong';
+import { newPongGame, normalizePongSave, PADDLE_HEIGHT, PONG_CANVAS, PONG_PLAYER_BOUNDS, projectPong, servePong, stepPong } from '../../src/lib/ping-pong';
 
 const GAME_KEY = 'niuma.ping-pong.v1';
 
@@ -326,6 +326,94 @@ test('an unlocked mouse can leave the viewport and re-enter during a rally witho
   } finally { await cdp.detach(); }
 });
 
+test('a short window has room below the court and the first move back from the bottom edge raises the racket', async ({ page }) => {
+  const height = 700;
+  await page.setViewportSize({ width: 720, height });
+  await openStoppedClockGame(page);
+  const surface = page.locator('.pong-surface');
+  await surface.focus();
+  await page.keyboard.press('Space');
+  await expect(surface).toHaveAttribute('data-running', 'true');
+  const box = (await surface.locator('canvas').boundingBox())!;
+  const bottom = box.y + box.height;
+  expect(height - bottom, 'leave space to swing down before the pointer leaves the page').toBeGreaterThanOrEqual(64);
+  const x = Math.round(box.x + box.width / 2);
+  const move = async (y: number) => {
+    await page.mouse.move(x, Math.round(y));
+    await page.clock.runFor(96);
+  };
+  const pauseAndReadY = async () => {
+    await expect(surface).toHaveAttribute('data-running', 'true');
+    await page.keyboard.press('Space');
+    return page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game.playerY as number, GAME_KEY);
+  };
+  await move(bottom - 180);
+  await move(bottom + 28);
+  await page.clock.runFor(96);
+  const backEdge = await pauseAndReadY();
+  expect(backEdge).toBeCloseTo(PONG_PLAYER_BOUNDS.yMin, 5);
+  await page.keyboard.press('Space');
+  await move(bottom + 8);
+  const toolbarReverse = await pauseAndReadY();
+  expect(toolbarReverse).toBeGreaterThan(backEdge + .03);
+
+  await page.keyboard.press('Space');
+  await move(height - 4);
+  await move(height + 40);
+  await expect(surface).toHaveAttribute('data-running', 'true');
+  await move(height - 20);
+  const firstMoveBack = await pauseAndReadY();
+  expect(firstMoveBack).toBeGreaterThan(backEdge + .03);
+  // Only the 20 pixels inside the window count. Time spent outside is not a stroke.
+  const projected = projectPong(0, firstMoveBack, PADDLE_HEIGHT);
+  const edge = projectPong(0, backEdge, PADDLE_HEIGHT);
+  expect((edge.y - projected.y) * box.height / PONG_CANVAS.height).toBeLessThan(24);
+});
+
+test('a held mouse swings back below a lock-denied embedded game and releasing outside keeps play active', async ({ page }) => {
+  await page.setViewportSize({ width: 1180, height: 840 });
+  await page.clock.install();
+  await page.route('**/__pong_frame__', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<iframe title="game" sandbox="allow-scripts allow-same-origin" style="display:block;width:900px;height:580px;border:0" src="/?play=ping-pong"></iframe>',
+  }));
+  await page.goto('/__pong_frame__');
+  const host = page.frameLocator('iframe');
+  await host.getByRole('button', { name: '开始比赛', exact: true }).click();
+  const surface = host.locator('.pong-surface');
+  await expect(surface).toHaveAttribute('data-running', 'true');
+  await expect(host.getByRole('status').filter({ hasText: /不能锁定鼠标/ })).toBeVisible();
+  const canvas = surface.locator('canvas');
+  const frame = page.frames().find(item => item.url().includes('play=ping-pong'))!;
+  const frameBox = (await page.locator('iframe').boundingBox())!;
+  const box = (await canvas.boundingBox())!;
+  const x = box.x + box.width / 2;
+  const frameBottom = frameBox.y + frameBox.height;
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 150));
+  await canvas.evaluate(el => (el as HTMLCanvasElement).addEventListener('pointermove', event => {
+    if (event.isTrusted && event.buttons === 1 && event.clientY > innerHeight)
+      el.setAttribute('data-trusted-outside-drag', 'true');
+  }));
+  const move = async (y: number) => {
+    await page.mouse.move(x, y);
+    await page.clock.runFor(96);
+  };
+  await move(box.y + box.height / 2);
+  await page.mouse.down();
+  await move(frameBottom - 4);
+  await move(frameBottom + 80);
+  await move(frameBottom + 36);
+  await expect(canvas).toHaveAttribute('data-trusted-outside-drag', 'true');
+  await page.mouse.up();
+  await expect(surface).toHaveAttribute('data-running', 'true');
+  await expect(host.getByRole('dialog')).toHaveCount(0);
+  await surface.focus();
+  await page.keyboard.press('Space');
+  const game = await frame.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
+  expect(game.phase).toBe('rally');
+  expect(game.playerY, '44 pixels of upward movement entirely outside must pull the racket off the back edge').toBeGreaterThan(PONG_PLAYER_BOUNDS.yMin + .06);
+});
+
 test('restart, keyboard steering and quick exit still work with free pointer input', async ({ page }) => {
   await openStoppedClockGame(page);
   const surface = page.getByRole('group', { name: '乒乓球操作区' });
@@ -408,7 +496,7 @@ test('optional mouse lock accepts relative movement and releases on pause or Esc
     const acquired = await page.evaluate(() => Boolean(document.pointerLockElement));
     if (!acquired) {
       test.info().annotations.push({ type: 'pointer-lock', description: 'Chrome declined pointer lock; the visible whole-window fallback was verified.' });
-      await expect(page.getByText('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。', { exact: true })).toBeVisible();
+      await expect(page.getByRole('status').filter({ hasText: /不能锁定鼠标/ })).toBeVisible();
     } else await expect(page.getByRole('button', { name: '鼠标已锁定', exact: true })).toBeDisabled();
 
     for (const offset of [{ x: 40, y: -15 }, { x: 90, y: -35 }]) {

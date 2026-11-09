@@ -17,7 +17,8 @@ export type PongStats = { version: 1; wins: number; matches: number; bestRally: 
 export const PONG_CANVAS = { width: camera.width, height: camera.height };
 export const PADDLE_HEIGHT = .17;
 export const NET_HEIGHT = .155;
-export const PONG_PLAYER_BOUNDS = { xMin: -1.12, xMax: 1.12, yMin: -.12, yMax: .90 };
+// At the rear limit the rendered handle has 21 px of clearance below it.
+export const PONG_PLAYER_BOUNDS = { xMin: -1.12, xMax: 1.12, yMin: -.36, yMax: .90 };
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 const GRAVITY = 6;
 const OPTIONS = {
@@ -56,10 +57,20 @@ export function paddleProjection(x: number, y: number) {
 export function ballProjection(x: number, y: number, z = 0) {
   return { ...projectPong(x, y, z), radius: 7.5 * cameraDepth(0, 0, 0) / cameraDepth(x, y, z) };
 }
+function playerHalfWidth(y: number) {
+  // Perspective enlarges the racket closest to the camera. Taper just the
+  // new backswing area, leaving the previous playing area at its full width.
+  const { yMin, xMax } = PONG_PLAYER_BOUNDS;
+  const fullWidthY = -.12, rearHalfWidth = 1.06;
+  const depth = clamp((y - yMin) / (fullWidthY - yMin), 0, 1);
+  return rearHalfWidth + (xMax - rearHalfWidth) * depth;
+}
 export function clampPlayerTarget(input: PongTarget, fallback: PongTarget = { x: 0, y: .28 }): PongTarget {
+  const y = clamp(Number.isFinite(input?.y) ? input.y : fallback.y, PONG_PLAYER_BOUNDS.yMin, PONG_PLAYER_BOUNDS.yMax);
+  const halfWidth = playerHalfWidth(y);
   return {
-    x: clamp(Number.isFinite(input?.x) ? input.x : fallback.x, PONG_PLAYER_BOUNDS.xMin, PONG_PLAYER_BOUNDS.xMax),
-    y: clamp(Number.isFinite(input?.y) ? input.y : fallback.y, PONG_PLAYER_BOUNDS.yMin, PONG_PLAYER_BOUNDS.yMax),
+    x: clamp(Number.isFinite(input?.x) ? input.x : fallback.x, -halfWidth, halfWidth),
+    y,
   };
 }
 
@@ -176,7 +187,7 @@ export function stepPong(input: PongState, elapsedSeconds: number, target: PongT
     state.computerSwing = Math.max(0, state.computerSwing - dt * 3.5);
     if (state.effect) { state.effect.age += dt; if (state.effect.age > .65) state.effect = null; }
     const beforePlayer = { x: state.playerX, y: state.playerY }, beforeComputer = { x: state.computerX, y: state.computerY };
-    const player = { x: clamp(beforePlayer.x + playerPlan.vx * dt, -1.12, 1.12), y: clamp(beforePlayer.y + playerPlan.vy * dt, -.12, .90),
+    const player = { ...clampPlayerTarget({ x: beforePlayer.x + playerPlan.vx * dt, y: beforePlayer.y + playerPlan.vy * dt }),
       vx: playerPlan.vx, vy: playerPlan.vy };
     state.playerX = player.x; state.playerY = player.y; state.playerVX = player.vx; state.playerVY = player.vy;
     let computerTarget = { x: state.ball.x * .35, y: 1.72 };
@@ -264,7 +275,9 @@ export function normalizePongSave(value: unknown): { game: PongState; stats: Pon
       message: winner ? winner === 'player' ? '这局你赢啦！' : '这局结束啦。' : '挥拍玩法已就绪，保留比分，从下一次发球继续。' };
   } else {
     const b = g.ball;
-    if (!bounded(g.playerX, -1.12, 1.12) || !bounded(g.playerY, -.12, .90) || !bounded(g.computerX, -1.12, 1.12) || !bounded(g.computerY, 1.1, 2.12)
+    if (!bounded(g.playerY, PONG_PLAYER_BOUNDS.yMin, PONG_PLAYER_BOUNDS.yMax)) return empty;
+    const halfWidth = playerHalfWidth(g.playerY);
+    if (!bounded(g.playerX, -halfWidth, halfWidth) || !bounded(g.computerX, -1.12, 1.12) || !bounded(g.computerY, 1.1, 2.12)
       || ![g.playerVX, g.playerVY, g.computerVX, g.computerVY].every(n => bounded(n, -5.3, 5.3))
       || !bounded(g.playerSwing, 0, 1) || !bounded(g.computerSwing, 0, 1) || !bounded(g.serveCountdown, 0, 1.1)
       || !bounded(g.elapsed, 0, 10_000_000)

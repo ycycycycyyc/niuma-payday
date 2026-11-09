@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import camera from '../src/assets/pong-court/camera.json' with { type: 'json' };
+import sprites from '../src/assets/pong-equipment/sprites.json' with { type: 'json' };
 import { ballProjection, clampPlayerTarget, matchWinner, newPongGame, normalizePongSave, paddleProjection, PADDLE_HEIGHT, projectPong, servePong, stepPong, sweptPaddleContact, unprojectPong, type Difficulty, type PongBall, type PongState, type PongTarget, type Side } from '../src/lib/ping-pong.ts';
 
 const saved = (game = newPongGame()) => ({ version: 1, game, stats: { version: 1, wins: 2, matches: 3, bestRally: 17 }, playedMs: 15_000 });
@@ -145,7 +146,7 @@ test('physics bounds gaps and invalid target samples without mutating the previo
   assert.deepEqual(input, original); assert.notEqual(short.ball, input.ball);
   for (const delta of [0, -1, NaN, Infinity]) assert.equal(stepPong(input, delta, { x: 0, y: .16 }), input);
   assert.deepEqual(stepPong(input, .02, { x: NaN, y: Infinity }), stepPong(input, .02, { x: input.playerX, y: input.playerY }));
-  assert.deepEqual(clampPlayerTarget({ x: 99, y: -99 }), { x: 1.12, y: -.12 });
+  assert.deepEqual(clampPlayerTarget({ x: 99, y: -99 }), { x: 1.06, y: -.36 });
   const tiny = stepPong(input, .001, { x: .001, y: .161 });
   assert.ok(tiny.elapsed > input.elapsed); assert.ok(Number.isFinite(tiny.playerVX));
 });
@@ -159,7 +160,7 @@ test('the game projects Blender table and net landmarks and inverts racket posit
   for (const [game, blender] of landmarks) {
     assert.ok(Math.hypot(game.x - blender.x, game.y - blender.y) < .01);
   }
-  for (const point of [{ x: -1, y: -.12 }, { x: 0, y: .28 }, { x: 1.1, y: .90 }]) {
+  for (const point of [{ x: -1.06, y: -.36 }, { x: -1, y: -.12 }, { x: 0, y: .28 }, { x: 1.1, y: .90 }]) {
     const pixel = projectPong(point.x, point.y, PADDLE_HEIGHT);
     const inverse = unprojectPong(pixel.x, pixel.y);
     assert.ok(Math.abs(inverse.x - point.x) < 1e-10 && Math.abs(inverse.y - point.y) < 1e-10);
@@ -179,14 +180,37 @@ test('new saves round-trip paused rallies and point states with safe metadata an
   }
 });
 
-test('moving all the way to a racket boundary still produces a valid resumable local save', () => {
-  for (const target of [{ x: -1.12, y: -.12 }, { x: 1.12, y: .90 }]) {
+test('old player bounds and the new rear corners both produce valid resumable local saves', () => {
+  for (const target of [{ x: -1.12, y: -.12 }, { x: 1.12, y: .90 }, { x: -1.06, y: -.36 }, { x: 1.06, y: -.36 }]) {
     let game = servePong(newPongGame());
     for (let i = 0; i < 30; i++) game = stepPong(game, .016, target);
     const restored = normalizePongSave(saved(game));
     assert.equal(restored.game.phase, 'rally');
+    assert.ok(Math.hypot(game.playerX - target.x, game.playerY - target.y) < 1e-8);
     assert.equal(restored.game.playerX, game.playerX);
     assert.equal(restored.game.playerY, game.playerY);
+  }
+});
+
+test('the racket can pull behind the baseline and the first upward movement releases it at the lower limit', () => {
+  const sprite = sprites.player;
+  // Opaque extents of the rendered rubber and handle within its 512px sprite.
+  const opaque = { left: 138, right: 374, bottom: 415 };
+  for (const x of [-2, 0, 2]) {
+    const rear = clampPlayerTarget({ x, y: -2 });
+    let game = servePong(newPongGame());
+    for (let i = 0; i < 30; i++) game = stepPong(game, .016, { x, y: -2 });
+    const face = paddleProjection(game.playerX, game.playerY);
+    assert.ok(face.y > camera.table.corners.nearLeft.y);
+    const bottom = face.y + (opaque.bottom - sprite.centerY) * face.radiusY / sprite.radiusY;
+    assert.ok(camera.height - bottom > 15 && camera.height - bottom < 25);
+    assert.ok(face.x + (opaque.left - sprite.centerX) * face.radiusX / sprite.radiusX > 15);
+    assert.ok(face.x + (opaque.right - sprite.centerX) * face.radiusX / sprite.radiusX < camera.width - 15);
+
+    const reverse = unprojectPong(face.x, face.y - 1);
+    game = stepPong(game, .016, reverse);
+    assert.ok(game.playerY > rear.y && game.playerVY > 0);
+    assert.ok(Math.abs(paddleProjection(game.playerX, game.playerY).y - (face.y - 1)) < 1e-8);
   }
 });
 
@@ -204,7 +228,8 @@ test('legacy airborne saves retain valid scores and history but resume safely fr
 test('malicious or non-finite game data never enters the simulation and valid history remains', () => {
   for (const mutate of [
     (g: PongState) => { g.ball.x = NaN; }, (g: PongState) => { g.ball.vz = Infinity; },
-    (g: PongState) => { g.playerY = 100; }, (g: PongState) => { g.playerVX = 100; },
+    (g: PongState) => { g.playerY = 100; }, (g: PongState) => { g.playerY = -.37; },
+    (g: PongState) => { g.playerY = -.36; g.playerX = 1.12; }, (g: PongState) => { g.playerVX = 100; },
     (g: PongState) => { g.elapsed = -1; }, (g: PongState) => { g.ball.serveStage = 'bad' as never; },
     (g: PongState) => { g.phase = 'finished'; }, (g: PongState) => { g.player = 11; },
   ]) {
