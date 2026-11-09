@@ -181,6 +181,19 @@ async function verifyDesktop() {
   await expect(widget.getByRole('button', { name: /^(隐藏|显示)金额$/ })).toHaveCount(0);
   await clickWidgetControl('返回主窗口');
   await expect.poll(async () => (await readMainWindow())?.minimized).toBe(false);
+  // The widget above uses the same Electron session. Its creation must not
+  // revoke the main game's pointer lock or grant unrelated browser permissions.
+  await main.getByRole('button', { name: '快乐实验室', exact: true }).click();
+  await main.getByRole('button', { name: '来打乒乓球', exact: true }).click();
+  await main.getByRole('button', { name: '开始比赛', exact: true }).click();
+  await expect.poll(() => main.evaluate(() => document.pointerLockElement === document.querySelector('.pong-surface canvas'))).toBe(true);
+  await main.keyboard.press('Space');
+  await expect(main.locator('.pong-surface')).toHaveAttribute('data-running', 'false');
+  await expect.poll(() => main.evaluate(() => document.pointerLockElement === null)).toBe(true);
+  await main.keyboard.press('Escape');
+  await expect(main.getByRole('heading', { name: '今日薪动' })).toBeVisible();
+  assert.equal(await main.evaluate(() => Notification.requestPermission()), 'denied');
+  record('game click locks the pointer after creating a widget; Space releases it and notifications remain denied');
   await main.getByRole('button', { name: '隐藏金额', exact: true }).click();
   await expect(widget.locator('.amount-integer')).toHaveText('••••');
   await expect(main.locator('.earnings-card .amount-integer')).toHaveText('••••');
@@ -193,6 +206,15 @@ async function verifyDesktop() {
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(true);
   await expect(widget.locator('.widget-time-value')).toBeVisible();
   record('main-window privacy control hides and restores earnings in both windows, persists both choices and leaves the widget countdown visible');
+  const widgetLocked = await widget.evaluate(async () => {
+    try {
+      await document.body.requestPointerLock();
+      return document.pointerLockElement === document.body;
+    } catch { return false; }
+    finally { if (document.pointerLockElement) document.exitPointerLock(); }
+  });
+  assert.equal(widgetLocked, false);
+  record('the wage widget cannot lock the pointer');
   await clickWidgetControl('返回主窗口');
   await expect.poll(async () => (await windows()).find(window => window.url.endsWith('#/widget'))?.visible).toBe(false);
   await expect.poll(async () => (await readMainWindow())?.minimized).toBe(false);

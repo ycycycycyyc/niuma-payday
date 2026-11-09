@@ -50,7 +50,7 @@ test('backgrounding, opening settings and hiding the game stop active play', asy
   await page.getByRole('button', { name: '开始比赛', exact: false }).first().click();
   await page.evaluate(() => window.dispatchEvent(new Event('blur')));
   await expect(page.locator('.pong-surface')).toHaveAttribute('data-running', 'false');
-  await page.getByRole('button', { name: '继续比赛', exact: false }).first().click();
+  await page.getByRole('button', { name: '继续比赛', exact: false }).first().press('Enter');
   await page.getByRole('button', { name: '工资与偏好设置', exact: true }).click();
   await expect(page.locator('.pong-surface')).toHaveAttribute('data-running', 'false');
   await page.keyboard.press('Escape');
@@ -273,52 +273,111 @@ test('window-wide pointer tracking continues outside the canvas and reverses imm
   } finally { await cdp.detach(); }
 });
 
-test('leaving the browser viewport pauses trusted pointer play and normal controls remain available', async ({ page }) => {
+test('an unlocked mouse can leave the viewport and re-enter during a rally without pausing or jumping', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(Element.prototype, 'requestPointerLock', { value: undefined }));
   const box = await openStoppedClockGame(page);
   const cdp = await page.context().newCDPSession(page);
   try {
-    const center = projectPong(0, .28, PADDLE_HEIGHT);
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x + center.x / PONG_CANVAS.width * box.width,
-      y: box.y + center.y / PONG_CANVAS.height * box.height, buttons: 0, pointerType: 'mouse' });
+    await page.evaluate(() => {
+      document.documentElement.addEventListener('pointerleave', event => {
+        document.documentElement.dataset.focusedPointerLeave = String(event.isTrusted && document.hasFocus());
+      }, { once: true });
+    });
+    const move = async (x: number, y: number) => {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0, pointerType: 'mouse' });
+      await page.clock.runFor(48);
+    };
+    const saved = () => page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
     const surface = page.getByRole('group', { name: '乒乓球操作区' });
-    await surface.focus();
-    await page.keyboard.press('Space');
-    await page.clock.runFor(32);
+    await page.getByRole('button', { name: '开始比赛', exact: true }).click();
     await expect(surface).toHaveAttribute('data-running', 'true');
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: -20, y: -20, buttons: 0, pointerType: 'mouse' });
+    expect(await page.evaluate(() => document.pointerLockElement)).toBeNull();
     await page.clock.runFor(32);
+    await page.keyboard.press('Space');
+    const baseline = await saved();
+    await page.keyboard.press('Space');
+
+    await move(-20, -20);
+    await expect(page.locator('html')).toHaveAttribute('data-focused-pointer-leave', 'true');
+    await expect(surface).toHaveAttribute('data-running', 'true');
+    const reentry = { x: box.x + box.width * .84, y: box.y + box.height * .72 };
+    await move(reentry.x, reentry.y);
+    await expect(surface).toHaveAttribute('data-running', 'true');
+    await page.keyboard.press('Space');
+    const reentered = await saved();
+    expect(reentered.playerX).toBeCloseTo(baseline.playerX, 6);
+    expect(reentered.playerY).toBeCloseTo(baseline.playerY, 6);
+
+    await page.keyboard.press('Space');
+    const direction = reentered.playerX > 0 ? -1 : 1;
+    await move(reentry.x + direction * 10, reentry.y);
+    await move(reentry.x + direction * 65, reentry.y);
+    await expect(surface).toHaveAttribute('data-running', 'true');
+    // Playwright ordinarily emulates focus in all headless tabs. Let Chrome deliver an actual blur.
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: false });
+    const otherTab = await page.context().newPage();
+    await otherTab.bringToFront();
     await expect(surface).toHaveAttribute('data-running', 'false');
-    const left = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: page.viewportSize()!.width - 15, y: 25, buttons: 0, pointerType: 'mouse' });
-    await surface.focus();
-    await page.keyboard.press('Space');
-    await page.clock.runFor(16);
-    await page.keyboard.press('Space');
-    const reentered = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
-    expect(reentered.playerX).toBeCloseTo(left.playerX, 6);
-    expect(reentered.playerY).toBeCloseTo(left.playerY, 6);
-    await page.getByRole('button', { name: '继续比赛', exact: false }).first().click();
-    await expect(surface).toHaveAttribute('data-running', 'true');
-    await page.getByRole('button', { name: '重新开始', exact: true }).click();
-    await expect(page.getByRole('dialog')).toBeVisible();
-    await page.getByRole('button', { name: '继续这局', exact: true }).click();
-    const baseline = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
-    const horizontal = baseline.playerX > 0 ? 'ArrowLeft' : 'ArrowRight';
-    const vertical = baseline.playerY > .35 ? 'ArrowDown' : 'ArrowUp';
-    await surface.focus();
-    await page.keyboard.press('Space');
-    await page.keyboard.down(horizontal);
-    await page.keyboard.down(vertical);
-    await page.clock.runFor(48);
-    await page.keyboard.up(horizontal);
-    await page.keyboard.up(vertical);
-    await page.keyboard.press('Space');
-    const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), GAME_KEY);
-    expect((saved.game.playerX - baseline.playerX) * (horizontal === 'ArrowRight' ? 1 : -1)).toBeGreaterThan(.05);
-    expect((saved.game.playerY - baseline.playerY) * (vertical === 'ArrowUp' ? 1 : -1)).toBeGreaterThan(.05);
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('heading', { name: '今日薪动' })).toBeVisible();
-    await expect(page).not.toHaveURL(/play=ping-pong/);
+    expect(await page.evaluate(() => document.hasFocus())).toBe(false);
+    const afterStroke = await saved();
+    expect((afterStroke.playerX - reentered.playerX) * direction).toBeGreaterThan(.05);
+    expect(afterStroke.phase).toBe('rally');
+    await otherTab.close();
+  } finally { await cdp.detach(); }
+});
+
+test('restart, keyboard steering and quick exit still work with free pointer input', async ({ page }) => {
+  await openStoppedClockGame(page);
+  const surface = page.getByRole('group', { name: '乒乓球操作区' });
+  await surface.focus();
+  await page.keyboard.press('Space');
+  await expect(surface).toHaveAttribute('data-running', 'true');
+  await page.getByRole('button', { name: '重新开始', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByRole('button', { name: '继续这局', exact: true }).click();
+  const baseline = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
+  const horizontal = baseline.playerX > 0 ? 'ArrowLeft' : 'ArrowRight';
+  const vertical = baseline.playerY > .35 ? 'ArrowDown' : 'ArrowUp';
+  await surface.focus();
+  await page.keyboard.press('Space');
+  await page.keyboard.down(horizontal);
+  await page.keyboard.down(vertical);
+  await page.clock.runFor(48);
+  await page.keyboard.up(horizontal);
+  await page.keyboard.up(vertical);
+  await page.keyboard.press('Space');
+  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), GAME_KEY);
+  expect((saved.game.playerX - baseline.playerX) * (horizontal === 'ArrowRight' ? 1 : -1)).toBeGreaterThan(.05);
+  expect((saved.game.playerY - baseline.playerY) * (vertical === 'ArrowUp' ? 1 : -1)).toBeGreaterThan(.05);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('heading', { name: '今日薪动' })).toBeVisible();
+  await expect(page).not.toHaveURL(/play=ping-pong/);
+});
+
+test('mouse-started and resumed rallies lock the cursor before a wide stroke reaches the window edge', async ({ page }) => {
+  const box = await openStoppedClockGame(page);
+  const surface = page.locator('.pong-surface');
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const snapshots = [];
+    for (const label of ['开始比赛', '继续比赛']) {
+      await page.getByRole('button', { name: label, exact: true }).click();
+      await expect.poll(() => page.evaluate(() =>
+        document.pointerLockElement === document.querySelector('.pong-surface canvas'))).toBe(true);
+      if (label === '继续比赛') {
+        const y = box.y + box.height * .7;
+        for (const x of [box.x + box.width / 2, -24, box.x + box.width * .8]) {
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0, pointerType: 'mouse' });
+          await page.clock.runFor(240);
+          await expect(surface).toHaveAttribute('data-running', 'true');
+        }
+      }
+      await page.keyboard.press('Space');
+      await expect(surface).toHaveAttribute('data-running', 'false');
+      await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
+      snapshots.push(await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY));
+    }
+    expect(Math.abs(snapshots[1].playerX - snapshots[0].playerX)).toBeGreaterThan(.05);
   } finally { await cdp.detach(); }
 });
 

@@ -39,6 +39,7 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
   const target = useRef({ x: initial.game.playerX, y: initial.game.playerY });
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const touchPointer = useRef<number | null>(null);
+  const startPointerType = useRef('');
   const [locked, setLocked] = useState(false);
   const [lockNotice, setLockNotice] = useState('');
   const strokeSamples = useRef<{ time: number; target: { x: number; y: number } }[]>([]);
@@ -83,7 +84,19 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     setView({ ...game.current });
     persist();
   }, [persist, settleTime]);
-  const start = useCallback(() => {
+  const reportLockFailure = useCallback(() => {
+    if (runningRef.current) setLockNotice('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。');
+  }, []);
+  const lockMouse = useCallback(() => {
+    const el = canvas.current;
+    if (!el || !runningRef.current || document.pointerLockElement === el) return;
+    surface.current?.focus({ preventScroll: true });
+    try {
+      if (!el.requestPointerLock) { reportLockFailure(); return; }
+      Promise.resolve(el.requestPointerLock()).catch(reportLockFailure);
+    } catch { reportLockFailure(); }
+  }, [reportLockFailure]);
+  const start = useCallback((withMouse = false) => {
     if (artStatus !== 'ready' || game.current.phase === 'finished' || document.hidden) return;
     game.current = servePong(game.current);
     runningRef.current = true;
@@ -91,8 +104,9 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     segment.current = { wall: Date.now(), perf: performance.now() };
     setView({ ...game.current });
     setRunning(true);
-    surface.current?.focus();
-  }, [artStatus]);
+    surface.current?.focus({ preventScroll: true });
+    if (withMouse) lockMouse();
+  }, [artStatus, lockMouse]);
 
   useEffect(() => {
     let mounted = true;
@@ -228,6 +242,11 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
       if (!box.width || !box.height) return;
       const inCourt = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
       const captured = document.pointerLockElement === el;
+      if (!captured && event.pointerType !== 'touch' &&
+          (event.clientX < 0 || event.clientY < 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight)) {
+        lastPointer.current = null;
+        return;
+      }
       const coalesced = event.getCoalescedEvents?.();
       for (const sample of coalesced?.length ? coalesced : [event]) {
         const previous = lastPointer.current;
@@ -267,29 +286,32 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     };
     const leave = (event: PointerEvent) => {
       if (event.pointerType === 'touch' || document.pointerLockElement === el) return;
+      // The browser stops reporting coordinates outside the document. Anchor
+      // the next stroke at re-entry without interrupting the current rally.
       lastPointer.current = null;
-      if (runningRef.current) pause();
     };
     let hadLock = false;
     const lockChange = () => {
       const acquired = document.pointerLockElement === el;
       setLocked(acquired);
       lastPointer.current = null;
-      if (acquired && !runningRef.current) document.exitPointerLock();
+      if (acquired) {
+        setLockNotice('');
+        if (!runningRef.current) document.exitPointerLock();
+      }
       if (hadLock && !acquired && runningRef.current) {
         pause();
         if (document.hasFocus() && !document.hidden) onExitRef.current();
       }
       hadLock = acquired;
     };
-    const lockError = () => setLockNotice('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。');
     window.addEventListener('pointermove', move, { capture: true, passive: true });
     window.addEventListener('pointerdown', down, true);
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', up, true);
     document.documentElement.addEventListener('pointerleave', leave);
     document.addEventListener('pointerlockchange', lockChange);
-    document.addEventListener('pointerlockerror', lockError);
+    document.addEventListener('pointerlockerror', reportLockFailure);
     return () => {
       window.removeEventListener('pointermove', move, true);
       window.removeEventListener('pointerdown', down, true);
@@ -297,19 +319,10 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
       window.removeEventListener('pointercancel', up, true);
       document.documentElement.removeEventListener('pointerleave', leave);
       document.removeEventListener('pointerlockchange', lockChange);
-      document.removeEventListener('pointerlockerror', lockError);
+      document.removeEventListener('pointerlockerror', reportLockFailure);
       if (document.pointerLockElement === el) document.exitPointerLock();
     };
-  }, [pause]);
-  const lockMouse = () => {
-    const el = canvas.current;
-    if (!el || !runningRef.current) return;
-    surface.current?.focus();
-    try {
-      if (!el.requestPointerLock) throw new Error();
-      Promise.resolve(el.requestPointerLock()).catch(() => setLockNotice('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。'));
-    } catch { setLockNotice('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。'); }
-  };
+  }, [pause, reportLockFailure]);
   const mainLabel = view.phase === 'finished' ? '再来一局' : running ? '暂停比赛' : view.phase === 'rally' ? '继续比赛' : view.phase === 'point' ? '接下一球' : '开始比赛';
 
   return <section className="pong-game" aria-labelledby="pong-title">
@@ -326,7 +339,13 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
         {!running && <div className="pong-overlay">
           <h3>{artStatus === 'loading' ? '正在打开球馆…' : artStatus === 'failed' ? '球馆素材载入失败' : view.phase === 'ready' ? '准备接发球' : view.phase === 'rally' ? '比赛已暂停' : view.message}</h3>
           {artStatus === 'failed' ? <button className="button primary" onClick={() => { setArtStatus('loading'); setArtAttempt(v => v + 1); }}>重新载入球馆</button> :
-            <button className="button primary" disabled={artStatus !== 'ready'} onClick={() => view.phase === 'finished' ? restart() : start()}><Play size={16} />{mainLabel}</button>}
+            <button className="button primary" disabled={artStatus !== 'ready'}
+              onPointerDown={event => { startPointerType.current = event.pointerType; }}
+              onClick={event => {
+                const withMouse = event.detail > 0 && startPointerType.current === 'mouse';
+                startPointerType.current = '';
+                if (view.phase === 'finished') restart(); else start(withMouse);
+              }}><Play size={16} />{mainLabel}</button>}
         </div>}
       </div>
       <div className="pong-toolbar"><div className="pong-main-controls">{running && <button className="button primary" onClick={pause}><Pause size={16} />暂停比赛<kbd>Space</kbd></button>}
@@ -335,7 +354,7 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
         <label className="pong-difficulty">电脑难度<select aria-label="乒乓球电脑难度" value={view.difficulty} disabled={view.phase !== 'ready' || view.player + view.computer > 0}
           onChange={event => restart(event.target.value as Difficulty)}>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
-      <p id="pong-instructions" className="pong-instructions">整页都可以滑动挥拍。锁定鼠标后可连续挥动，空格暂停并释放鼠标。键盘可用方向键或 WASD。<span><VolumeX size={13} />静音球馆</span></p>
+      <p id="pong-instructions" className="pong-instructions">鼠标点击开始会锁定指针，空格暂停并释放。键盘可用方向键或 WASD。<span><VolumeX size={13} />静音球馆</span></p>
       {lockNotice && <p className="pong-live-message" role="status">{lockNotice}</p>}
       <p className="pong-live-message" role="status">{view.phase === 'rally' && running && view.serveCountdown > 0 ? '电脑准备发球' : view.phase === 'rally' && running ? `连续回击 ${view.rally} 次` : ''}</p>
     </div>

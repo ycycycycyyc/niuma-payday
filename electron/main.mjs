@@ -106,6 +106,12 @@ function validateSender(event) {
   }
 }
 
+function allowGamePointerLock(contents, permission, details) {
+  return permission === 'pointerLock' && !!contents && !contents.isDestroyed()
+    && ownedContents.get(contents.id) === 'main' && details?.isMainFrame === true
+    && isAllowedURL(details.requestingUrl, 'main') && isAllowedURL(contents.getURL(), 'main');
+}
+
 function secureWindow(window, role) {
   const id = window.webContents.id;
   ownedContents.set(id, role);
@@ -115,8 +121,15 @@ function secureWindow(window, role) {
     if (!isAllowedURL(url, role)) event.preventDefault();
   });
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
-  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  window.webContents.session.setPermissionCheckHandler(() => false);
+  // The main window and wage widget share one session. Opening a widget must
+  // neither replace the policy nor give the widget access to pointer lock.
+  if (role === 'main') {
+    const session = window.webContents.session;
+    session.setPermissionRequestHandler((contents, permission, callback, details) =>
+      callback(allowGamePointerLock(contents, permission, details)));
+    session.setPermissionCheckHandler((contents, permission, _origin, details) =>
+      allowGamePointerLock(contents, permission, details));
+  }
 }
 
 function loadWindow(window, widget = false) {
