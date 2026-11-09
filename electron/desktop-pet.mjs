@@ -11,10 +11,24 @@ const intersects = (rect, x, y, size) => x < rect.x + rect.width && x + size > r
   && y < rect.y + rect.height && y + size > rect.y;
 const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
 
+function setCompanionShape(surface, rects) {
+  if (!surface.nativeCompanionShape) return;
+  const key = rects.length ? JSON.stringify(rects) : '';
+  if (key === (surface.shapeKey || '')) return;
+  surface.win.setShape(rects);
+  surface.shapeKey = key;
+}
+
+function enclosingRect(x, y, width, height) {
+  const left = Math.floor(x), top = Math.floor(y);
+  return { x: left, y: top, width: Math.ceil(x + width) - left, height: Math.ceil(y + height) - top };
+}
+
 function hideSurface(surface) {
   if (!surface.shown || surface.win.isDestroyed()) return;
   surface.win.webContents.send('niuma:desktop-pet-frame', { dog: null, bone: null, sampleTime: performance.now() });
   surface.win.hide();
+  setCompanionShape(surface, []);
   surface.shown = false;
   surface.lastFrame = '';
   if (surface.acceptsMouse) surface.win.setIgnoreMouseEvents(true);
@@ -65,7 +79,8 @@ function createSurface(area, root, developmentURL) {
     const loading = developmentURL
       ? win.loadURL(new URL('/pet.html', developmentURL).href)
       : win.loadFile(path.join(root, 'dist', 'pet.html'));
-    return { win, loading, createdAt, ready: false, prepared: false, shown: false, lastFrame: '' };
+    return { win, loading, createdAt, ready: false, prepared: false, shown: false, lastFrame: '',
+      nativeCompanionShape: process.platform === 'win32' };
   } catch (error) {
     win.destroy();
     throw error;
@@ -210,8 +225,9 @@ export class DesktopPet {
       // Pointer capture belongs to the surface where the press began, even
       // when the pointer races beyond the sprite or crosses to another display.
       const press = this.trip?.press;
-      const accepts = Boolean(surface.shown && (press ? press.surface === surface :
-        hit && cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height));
+      const overSurface = cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height;
+      const accepts = Boolean(surface.shown && canInteract && (press ? press.surface === surface :
+        surface.nativeCompanionShape || (hit && overSurface)));
       if (accepts !== Boolean(surface.acceptsMouse)) {
         surface.win.setIgnoreMouseEvents(!accepts);
         surface.acceptsMouse = accepts;
@@ -543,6 +559,21 @@ export class DesktopPet {
         menuOpen: false,
         ...(surface === handoffSurface ? { handoff: true } : {}),
       };
+      if (surface.nativeCompanionShape) {
+        // Windows must know the input region before the pointer enters it.
+        // During a press the original window keeps capture even on a fast drag.
+        const rects = [];
+        if (frame.dog?.interactive && this.trip.press?.surface !== surface) {
+          const dog = frame.dog;
+          // Leave room for the compositor's small interpolation between samples.
+          rects.push(enclosingRect(dog.x - 2, dog.y - 2, size + 4, size + 4));
+          const anchor = this.trip.restoreTarget;
+          if (anchor?.surface === surface && anchor.until > sampleTime) {
+            rects.push(enclosingRect(anchor.x - bounds.x, anchor.y - bounds.y, anchor.width, anchor.height));
+          }
+        }
+        setCompanionShape(surface, rects);
+      }
       const key = JSON.stringify(frame);
       if (key !== surface.lastFrame) {
         win.webContents.send('niuma:desktop-pet-frame', { ...frame, sampleTime });

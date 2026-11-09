@@ -81,6 +81,37 @@ test('click-through is restored when the dog stops owning input or its surface i
   assert.equal(input.at(-1), true);
 });
 
+test('Windows prepares only the dog and its second-click region before the cursor enters', () => {
+  const { pet, surface } = companion();
+  const shapes: { x: number; y: number; width: number; height: number }[][] = [];
+  Object.assign(surface, { nativeCompanionShape: true, ready: true });
+  Object.assign(surface.win, { setShape: (rects: typeof shapes[number]) => shapes.push(rects) });
+  Object.assign(surface.win.webContents, { send() {} });
+  pet.displays = [{ id: 1, workArea: bounds }];
+  const paint = () => pet.paint(pet.trip.pet, 76, null);
+  const outside = { x: -700, y: 200 };
+  paint();
+  pet.syncPetMouseRegion(outside);
+  assert.equal(surface.acceptsMouse, true, 'the first mouse down does not wait for a cursor sample');
+  const dog = shapes.at(-1)![0];
+  assert.ok(dog.width >= 76 && dog.width < 84);
+  assert.ok(dog.x > outside.x - bounds.x, 'the native region excludes the surrounding desktop');
+  const event = { processId: 7, frameId: 8 };
+  const anchor = { x: 1462, y: 1362, width: 76, height: 76 };
+  pet.setRestoreTarget(event, surface, anchor);
+  pet.trip.pet.x += 15;
+  paint();
+  assert.deepEqual(shapes.at(-1)![1], anchor);
+  pet.trip.restoreTarget.until = 0;
+  paint();
+  assert.equal(shapes.at(-1)!.length, 1);
+  pet.state = { phase: 'chasing' };
+  paint();
+  pet.syncPetMouseRegion(outside);
+  assert.deepEqual(shapes.at(-1), [], 'chasing can paint outside the former dog region');
+  assert.equal(surface.acceptsMouse, false, 'chasing stays entirely click-through');
+});
+
 test('hovering or starting a double-click at the feet does not interrupt a walking dog', () => {
   const { pet, surface } = companion();
   pet.trip.pet = createCompanionMotion({ x: -500, y: 200, facing: 1, pose: 'walk', frame: 2 }, bounds, 76);

@@ -25,17 +25,21 @@ const setCursorPos = user32?.func('bool __stdcall SetCursorPos(int, int)');
 const mouseEvent = user32?.func('void __stdcall mouse_event(uint32_t, uint32_t, uint32_t, uint32_t, uintptr_t)');
 const setThreadDpiAwareness = user32?.func('intptr_t __stdcall SetThreadDpiAwarenessContext(intptr_t)');
 const getPhysicalCursorPos = user32?.func('bool __stdcall GetPhysicalCursorPos(void *)');
+const nativePoint = koffi.struct('NiumaTestPoint', { x: 'int32_t', y: 'int32_t' });
+const windowFromPoint = user32?.func('__stdcall', 'WindowFromPoint', 'uintptr_t', [nativePoint]);
+const getAncestor = user32?.func('uintptr_t __stdcall GetAncestor(uintptr_t, uint32_t)');
+const rootAt = point => Number(getAncestor(windowFromPoint(point), 2)); // GA_ROOT
 const previousDpiContext = setThreadDpiAwareness?.(-4);
 function physicalCursor() {
   const point = Buffer.alloc(8);
   assert.ok(getPhysicalCursorPos(point));
   return { x: point.readInt32LE(0), y: point.readInt32LE(4) };
 }
-let desktop, widget, originalCursor;
+let desktop, widget, originalCursor, receiver;
 
 async function windows() {
   return desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => ({
-    id: win.id, url: win.webContents.getURL(), visible: win.isVisible(),
+    id: win.id, hwnd: win.getNativeWindowHandle().readUInt32LE(), url: win.webContents.getURL(), visible: win.isVisible(),
     bounds: win.getContentBounds(), zoom: win.webContents.getZoomFactor(), ignoresMouse: win.__feedingSmokeIgnoresMouse,
   })));
 }
@@ -57,11 +61,15 @@ async function phase() {
   return widget.evaluate(async () => (await window.niuma.getDesktopPetState()).phase);
 }
 
-async function moveCursor(point) {
-  assert.ok(setCursorPos, 'Physical cursor testing requires Windows');
-  const physical = await desktop.evaluate(({ screen }, point) => screen.dipToScreenPoint(point), {
+async function pixels(point) {
+  return desktop.evaluate(({ screen }, point) => screen.dipToScreenPoint(point), {
     x: Math.round(point.x), y: Math.round(point.y),
   });
+}
+
+async function moveCursor(point) {
+  assert.ok(setCursorPos, 'Physical cursor testing requires Windows');
+  const physical = await pixels(point);
   assert.equal(setCursorPos(physical.x, physical.y), true);
   const actual = await desktop.evaluate(({ screen }) => screen.getCursorScreenPoint());
   assert.ok(Math.hypot(actual.x - point.x, actual.y - point.y) < 3,
@@ -122,6 +130,7 @@ async function clickFood(page, food, dogSelector = '.widget-dog') {
   const cursor = await desktop.evaluate(({ screen }) => screen.getCursorScreenPoint());
   assert.ok(Math.hypot(cursor.x - expectedPoint.x, cursor.y - expectedPoint.y) < 3,
     'Physical click is restricted to the verified food button');
+  assert.equal(rootAt(physicalCursor()), (await nativeWindow(page)).hwnd, 'The food button belongs to the native test window');
   mouseEvent(0x0002, 0, 0, 0, 0);
   mouseEvent(0x0004, 0, 0, 0, 0);
   await expect(page.locator(dogSelector)).toHaveAttribute('data-feeding', 'true');
@@ -173,17 +182,72 @@ async function verifyDesktopFeedIgnored(page) {
   await expectNoDesktopFood(page);
 }
 
-async function dragCompanion(page, reducedMotion) {
+async function createReceiver() {
+  const receiverId = await desktop.evaluate(async ({ BrowserWindow, screen }) => {
+    const card = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().endsWith('#/widget')).getContentBounds();
+    const bounds = screen.getDisplayMatching(card).workArea;
+    const width = Math.min(880, bounds.width);
+    const height = Math.min(660, bounds.height);
+    const win = new BrowserWindow({
+      x: Math.max(bounds.x, Math.min(bounds.x + bounds.width - width, Math.round(card.x + (card.width - width) / 2))),
+      y: Math.max(bounds.y, Math.min(bounds.y + bounds.height - height, Math.round(card.y + (card.height - height) / 2))),
+      width, height, frame: false, show: false, alwaysOnTop: true, skipTaskbar: true,
+      backgroundColor: '#f1eeea', webPreferences: { sandbox: true },
+    });
+    await win.loadURL('data:text/html,<title>Niuma pointer test receiver</title>');
+    win.showInactive();
+    return win.id;
+  });
+  const page = desktop.windows().find(item => item.url().startsWith('data:text/html,'));
+  assert.ok(page);
+  const owner = await nativeWindow(page);
+  assert.equal(owner.id, receiverId);
+  // Count only actual OS events, so a click sent through the paint surface is visible.
+  await page.evaluate(() => {
+    window.testDown = 0;
+    document.addEventListener('pointerdown', e => { if (e.isTrusted) window.testDown++; }, true);
+  });
+  return { ...owner, page };
+}
+
+async function approachFromDesktop(point) {
+  await moveCursor(point);
+  await expect.poll(() => rootAt(physicalCursor())).toBe(receiver.hwnd);
+}
+
+async function pressImmediately(page, grip) {
+  const physical = await pixels(grip);
+  const petWindow = await nativeWindow(page);
+  const target = rootAt(physical);
+  assert.ok(target === petWindow.hwnd || target === receiver.hwnd,
+    'Both possible recipients must be owned by this test before pressing');
+  // Keep these calls adjacent. Waiting for a timer, a pointer event or an IPC
+  // round-trip here conceals a first press that fell through to the desktop.
+  assert.ok(setCursorPos(physical.x, physical.y));
+  mouseEvent(0x0002, 0, 0, 0, 0);
+}
+
+async function expectPetPress(page, number) {
+  let counts;
+  await expect.poll(async () => {
+    counts = await Promise.all([page.evaluate(() => window.testDown), receiver.page.evaluate(() => window.testDown)]);
+    return counts[0] >= number || counts[1] > 0;
+  }, { intervals: [10, 20, 40] }).toBe(true);
+  observations.firstPresses ??= [];
+  observations.firstPresses.push({ dog: counts[0], receiver: counts[1] });
+  assert.deepEqual(counts, [number, 0], 'Immediate Windows pointerdown must reach the dog, not the window behind it');
+}
+
+async function dragCompanion(page, reducedMotion, pressNumber) {
   const owner = await nativeWindow(page);
   const cardBounds = (await nativeWindow(widget)).bounds;
-  let grab;
-  await expect.poll(async () => {
-    const center = await pointAt(page, '#desktop-dog');
-    grab = { x: center.x - 10, y: center.y + 24 };
-    await moveCursor(grab);
-    return cursorHitsCompanion(page);
-  }).toBe(true);
+  const initial = await pointAt(page, '#desktop-dog');
+  await approachFromDesktop({ x: initial.x + 100, y: initial.y - 80 });
   const start = await pointAt(page, '#desktop-dog');
+  const size = (await page.locator('#desktop-dog').boundingBox()).width * owner.zoom;
+  // The lower square corner includes transparent pixels beyond the painted fur.
+  const grab = reducedMotion ? { x: start.x - size * 0.47, y: start.y + size * 0.47 }
+    : { x: start.x - 10, y: start.y + 24 };
   const dx = start.x < owner.bounds.x + owner.bounds.width / 2 ? 145 : -145;
   const dy = start.y < owner.bounds.y + owner.bounds.height / 2 ? 90 : -90;
   const expected = { x: start.x + dx, y: start.y + dy };
@@ -191,8 +255,9 @@ async function dragCompanion(page, reducedMotion) {
     const center = await pointAt(page, '#desktop-dog');
     return Math.hypot(center.x - expected.x, center.y - expected.y);
   };
-  mouseEvent(0x0002, 0, 0, 0, 0);
+  await pressImmediately(page, grab);
   try {
+    await expectPetPress(page, pressNumber);
     // The fast move leaves the original dog-sized hit region in one sample.
     await moveCursor({ x: grab.x + dx, y: grab.y + dy });
     await expect.poll(distanceFromDrop, { timeout: 4000 }).toBeLessThan(9);
@@ -202,8 +267,7 @@ async function dragCompanion(page, reducedMotion) {
   } finally {
     mouseEvent(0x0004, 0, 0, 0, 0);
   }
-  await moveCursor(grab);
-  await expect.poll(async () => (await nativeWindow(page)).ignoresMouse).toBe(true);
+  await approachFromDesktop(grab);
   if (reducedMotion) {
     await page.waitForTimeout(350);
     assert.ok(await distanceFromDrop() < 9, 'After release the quiet dog stays where the button was released');
@@ -259,10 +323,15 @@ async function verify() {
       Math.round(area.y + area.height / 2));
   });
   await verifyWidgetMeal(widget);
+  receiver = await createReceiver();
   await widget.evaluate(() => window.niuma.minimizeWidget({ reducedMotion: false }));
   await expect.poll(phase, { timeout: 10000 }).toBe('companion');
   await expect.poll(async () => Boolean(await petPage())).toBe(true);
   let pet = await petPage();
+  await pet.evaluate(() => {
+    window.testDown = 0;
+    document.querySelector('#desktop-dog').addEventListener('pointerdown', e => { if (e.isTrusted) window.testDown++; }, true);
+  });
   await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-pose', 'walk', { timeout: 10000 });
   await moveCursor(await pointAt(pet, '#desktop-dog'));
   await expect.poll(async () => (await nativeWindow(pet)).ignoresMouse).toBe(false);
@@ -286,27 +355,31 @@ async function verify() {
   observations.companionHover = { start, dog: await dogPosition(pet), native: await nativeWindow(pet) };
   record('companion keeps moving on hover without a food menu; owned and foreign feed calls cannot start a meal');
 
-  await dragCompanion(pet, false);
+  await dragCompanion(pet, false, 1);
   await pet.evaluate(() => window.petOverlay.setReducedMotion(true));
   await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-reduced-motion', 'true');
-  await dragCompanion(pet, true);
+  await dragCompanion(pet, true, 2);
   await pet.evaluate(() => window.petOverlay.setReducedMotion(false));
   await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-reduced-motion', 'false');
 
-  // Reacquire the moving dog, then keep the physical pointer at the first click's location.
-  await expect.poll(async () => {
-    await moveCursor(await pointAt(pet, '#desktop-dog'));
-    return cursorHitsCompanion(pet);
-  }).toBe(true);
-  mouseEvent(0x0002, 0, 0, 0, 0);
+  // Start outside the dog again. The second click stays at its original
+  // location while the dog keeps moving under its retained double-click target.
+  const from = await pointAt(pet, '#desktop-dog');
+  await approachFromDesktop({ x: from.x - 100, y: from.y + 70 });
+  await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-pose', 'walk', { timeout: 8000 });
+  const clickPoint = await pointAt(pet, '#desktop-dog', 0.88);
+  await pressImmediately(pet, clickPoint);
   mouseEvent(0x0004, 0, 0, 0, 0);
+  await expectPetPress(pet, 3);
   await pet.waitForTimeout(80);
   assert.ok(await cursorHitsCompanion(pet), 'Second OS click must still hit the companion restore target');
+  assert.equal(rootAt(physicalCursor()), (await nativeWindow(pet)).hwnd, 'The second OS click belongs to the pet surface');
   mouseEvent(0x0002, 0, 0, 0, 0);
   mouseEvent(0x0004, 0, 0, 0, 0);
   await expect.poll(phase, { timeout: 10000 }).toBe('docked');
   await expect.poll(async () => (await nativeWindow(widget)).visible).toBe(true);
   await expect(widget.locator('.widget-dog')).toBeVisible();
+  await desktop.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.destroy(), receiver.id);
   await openMenu(widget, '.widget-dog');
   await moveCursor(away);
   await expect(widget.locator('.pet-food-menu')).toBeHidden();

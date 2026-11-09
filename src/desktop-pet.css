@@ -21,6 +21,10 @@ html, body {
   background: transparent;
 }
 #desktop-dog[data-interactive="true"] { pointer-events: auto; cursor: grab; touch-action: none; }
+/* Fully transparent pixels in a layered Windows window let clicks through.
+   Keep the dog's feet and the stationary second-click target hittable. */
+#desktop-dog[data-interactive="true"],
+#desktop-dog[data-interactive="true"] .pet-restore-target { background-color: rgb(0 0 0 / 0.008); }
 #desktop-dog[data-dragging="true"] { cursor: grabbing; }
 #desktop-dog[data-feedable="true"] { pointer-events: auto; cursor: pointer; }
 #desktop-dog:focus { outline: none; }
