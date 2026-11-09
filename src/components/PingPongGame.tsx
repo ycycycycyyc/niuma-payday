@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Flag, Pause, Play, RotateCcw, Trophy, VolumeX } from 'lucide-react';
-import { clampPlayerTarget, matchWinner, newPongGame, normalizePongSave, PONG_CANVAS, servePong, stepPong, unprojectPong, type Difficulty, type PongStats } from '../lib/ping-pong';
-import { drawPong } from '../lib/ping-pong-draw';
+import { clampPlayerTarget, matchWinner, newPongGame, normalizePongSave, PADDLE_HEIGHT, PONG_CANVAS, projectPong, servePong, stepPong, unprojectPong, type Difficulty, type PongStats } from '../lib/ping-pong';
+import { drawPong, preparePongArt } from '../lib/ping-pong-draw';
 import { duration, currencySymbol, money } from '../lib/clock';
 import { earningsBetween, type SalarySettings } from '../lib/salary';
 import type { CalendarCache } from '../../shared/calendar.mjs';
@@ -33,8 +33,14 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
   const [restartOpen, setRestartOpen] = useState(false);
   const restartDialog = useRef<HTMLDialogElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const [artStatus, setArtStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [artAttempt, setArtAttempt] = useState(0);
   const surface = useRef<HTMLDivElement>(null);
   const target = useRef({ x: initial.game.playerX, y: initial.game.playerY });
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const touchPointer = useRef<number | null>(null);
+  const [locked, setLocked] = useState(false);
+  const [lockNotice, setLockNotice] = useState('');
   const strokeSamples = useRef<{ time: number; target: { x: number; y: number } }[]>([]);
   const keys = useRef(new Set<string>());
   const reduced = useRef(false);
@@ -68,6 +74,7 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     if (runningRef.current) settleTime();
     stats.current.bestRally = Math.max(stats.current.bestRally, game.current.bestRally);
     runningRef.current = false;
+    if (canvas.current && document.pointerLockElement === canvas.current) document.exitPointerLock();
     segment.current = null;
     keys.current.clear();
     strokeSamples.current.length = 0;
@@ -77,14 +84,25 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     persist();
   }, [persist, settleTime]);
   const start = useCallback(() => {
-    if (game.current.phase === 'finished' || document.hidden) return;
+    if (artStatus !== 'ready' || game.current.phase === 'finished' || document.hidden) return;
     game.current = servePong(game.current);
     runningRef.current = true;
+    setLockNotice('');
     segment.current = { wall: Date.now(), perf: performance.now() };
     setView({ ...game.current });
     setRunning(true);
     surface.current?.focus();
-  }, []);
+  }, [artStatus]);
+
+  useEffect(() => {
+    let mounted = true;
+    preparePongArt().then(() => {
+      if (!mounted) return;
+      if (canvas.current) drawPong(canvas.current, game.current, reduced.current);
+      setArtStatus('ready');
+    }).catch(() => { if (mounted) setArtStatus('failed'); });
+    return () => { mounted = false; };
+  }, [artAttempt]);
 
   useEffect(() => { if (!active) pause(); }, [active, pause]);
   useEffect(() => {
@@ -201,30 +219,96 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     setRestartOpen(false); persist();
     if (canvas.current) drawPong(canvas.current, game.current, reduced.current);
   };
-  const pointer = (event: React.PointerEvent<HTMLCanvasElement>, pickup = false) => {
-    if (!event.isPrimary) return;
-    const box = event.currentTarget.getBoundingClientRect();
-    if (!box.width || !box.height) return;
-    if (!runningRef.current && game.current.phase === 'rally') return;
-    const input = event.nativeEvent;
-    const coalesced = runningRef.current && !pickup ? input.getCoalescedEvents?.() : undefined;
-    const events = coalesced?.length ? coalesced : [input];
-    for (const sample of events) {
-      const world = unprojectPong(
-        (sample.clientX - box.left) * PONG_CANVAS.width / box.width,
-        (sample.clientY - box.top) * PONG_CANVAS.height / box.height,
-      );
-      target.current = clampPlayerTarget(world);
-      if (runningRef.current && !pickup) strokeSamples.current.push({ time: sample.timeStamp, target: target.current });
+  useEffect(() => {
+    const el = canvas.current;
+    if (!el) return;
+    function move(event: PointerEvent) {
+      if (!el || !event.isPrimary || (event.pointerType === 'touch' && event.pointerId !== touchPointer.current)) return;
+      const box = el.getBoundingClientRect();
+      if (!box.width || !box.height) return;
+      const inCourt = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+      const captured = document.pointerLockElement === el;
+      const coalesced = event.getCoalescedEvents?.();
+      for (const sample of coalesced?.length ? coalesced : [event]) {
+        const previous = lastPointer.current;
+        lastPointer.current = { x: sample.clientX, y: sample.clientY };
+        if (!runningRef.current) {
+          if (!inCourt || game.current.phase === 'rally') continue;
+          target.current = clampPlayerTarget(unprojectPong(
+            (sample.clientX - box.left) * PONG_CANVAS.width / box.width,
+            (sample.clientY - box.top) * PONG_CANVAS.height / box.height));
+          game.current = { ...game.current, playerX: target.current.x, playerY: target.current.y, playerVX: 0, playerVY: 0, playerSwing: 0 };
+          drawPong(el, game.current, reduced.current);
+          continue;
+        }
+        if (!captured && !previous) continue;
+        // Apply displacement to the *clamped* racket. Excess motion past an
+        // edge is discarded, so the first reverse movement always takes effect.
+        const dx = captured ? sample.movementX : sample.clientX - previous!.x;
+        const dy = captured ? sample.movementY : sample.clientY - previous!.y;
+        const startPixel = projectPong(target.current.x, target.current.y, PADDLE_HEIGHT);
+        const next = unprojectPong(startPixel.x + dx * PONG_CANVAS.width / box.width,
+          startPixel.y + dy * PONG_CANVAS.height / box.height);
+        target.current = clampPlayerTarget(next, target.current);
+        strokeSamples.current.push({ time: sample.timeStamp, target: target.current });
+      }
+      if (strokeSamples.current.length > 64) strokeSamples.current.splice(0, strokeSamples.current.length - 64);
     }
-    if (strokeSamples.current.length > 64) strokeSamples.current.splice(0, strokeSamples.current.length - 64);
-    // Entering the court (or touching it again) places the racket at rest.
-    // Only subsequent motion can supply a stroke.
-    if (pickup || !runningRef.current) {
-      strokeSamples.current.length = 0;
-      game.current = { ...game.current, playerX: target.current.x, playerY: target.current.y, playerVX: 0, playerVY: 0, playerSwing: 0 };
-      drawPong(event.currentTarget, game.current, reduced.current);
-    }
+    const down = (event: PointerEvent) => {
+      // A new touch places a finger; picking it up and setting it down elsewhere is not a stroke.
+      if (event.pointerType === 'touch' && event.isPrimary && event.target === el) {
+        touchPointer.current = event.pointerId;
+        lastPointer.current = { x: event.clientX, y: event.clientY };
+        el.setPointerCapture(event.pointerId);
+      }
+    };
+    const up = (event: PointerEvent) => {
+      if (event.pointerId === touchPointer.current) { touchPointer.current = null; lastPointer.current = null; }
+    };
+    const leave = (event: PointerEvent) => {
+      if (event.pointerType === 'touch' || document.pointerLockElement === el) return;
+      lastPointer.current = null;
+      if (runningRef.current) pause();
+    };
+    let hadLock = false;
+    const lockChange = () => {
+      const acquired = document.pointerLockElement === el;
+      setLocked(acquired);
+      lastPointer.current = null;
+      if (acquired && !runningRef.current) document.exitPointerLock();
+      if (hadLock && !acquired && runningRef.current) {
+        pause();
+        if (document.hasFocus() && !document.hidden) onExitRef.current();
+      }
+      hadLock = acquired;
+    };
+    const lockError = () => setLockNotice('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。');
+    window.addEventListener('pointermove', move, { capture: true, passive: true });
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    document.documentElement.addEventListener('pointerleave', leave);
+    document.addEventListener('pointerlockchange', lockChange);
+    document.addEventListener('pointerlockerror', lockError);
+    return () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      document.documentElement.removeEventListener('pointerleave', leave);
+      document.removeEventListener('pointerlockchange', lockChange);
+      document.removeEventListener('pointerlockerror', lockError);
+      if (document.pointerLockElement === el) document.exitPointerLock();
+    };
+  }, [pause]);
+  const lockMouse = () => {
+    const el = canvas.current;
+    if (!el || !runningRef.current) return;
+    surface.current?.focus();
+    try {
+      if (!el.requestPointerLock) throw new Error();
+      Promise.resolve(el.requestPointerLock()).catch(() => setLockNotice('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。'));
+    } catch { setLockNotice('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。'); }
   };
   const mainLabel = view.phase === 'finished' ? '再来一局' : running ? '暂停比赛' : view.phase === 'rally' ? '继续比赛' : view.phase === 'point' ? '接下一球' : '开始比赛';
 
@@ -238,19 +322,21 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
       </div>
       <div className="pong-surface" ref={surface} tabIndex={0} role="group" aria-label="乒乓球操作区" aria-describedby="pong-instructions" data-running={running} data-phase={view.phase} data-rally={view.rally} data-hitter={view.ball.hitter}>
         <canvas ref={canvas} aria-label="乒乓球台：你控制下方球拍，电脑在上方" role="img"
-          onPointerMove={event => pointer(event)} onPointerEnter={event => pointer(event, true)}
-          onPointerDown={event => { pointer(event, true); event.currentTarget.setPointerCapture(event.pointerId); surface.current?.focus(); }} />
+          onPointerDown={() => surface.current?.focus()} />
         {!running && <div className="pong-overlay">
-          <h3>{view.phase === 'ready' ? '准备接发球' : view.phase === 'rally' ? '比赛已暂停' : view.message}</h3>
-          <button className="button primary" onClick={() => view.phase === 'finished' ? restart() : start()}><Play size={16} />{mainLabel}</button>
+          <h3>{artStatus === 'loading' ? '正在打开球馆…' : artStatus === 'failed' ? '球馆素材载入失败' : view.phase === 'ready' ? '准备接发球' : view.phase === 'rally' ? '比赛已暂停' : view.message}</h3>
+          {artStatus === 'failed' ? <button className="button primary" onClick={() => { setArtStatus('loading'); setArtAttempt(v => v + 1); }}>重新载入球馆</button> :
+            <button className="button primary" disabled={artStatus !== 'ready'} onClick={() => view.phase === 'finished' ? restart() : start()}><Play size={16} />{mainLabel}</button>}
         </div>}
       </div>
       <div className="pong-toolbar"><div className="pong-main-controls">{running && <button className="button primary" onClick={pause}><Pause size={16} />暂停比赛<kbd>Space</kbd></button>}
+        {running && <button className="button secondary" disabled={locked} onClick={lockMouse}>{locked ? '鼠标已锁定' : '锁定鼠标'}</button>}
         <button className="button secondary" onClick={() => { pause(); setRestartOpen(true); }}><RotateCcw size={15} />重新开始</button></div>
         <label className="pong-difficulty">电脑难度<select aria-label="乒乓球电脑难度" value={view.difficulty} disabled={view.phase !== 'ready' || view.player + view.computer > 0}
           onChange={event => restart(event.target.value as Difficulty)}>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
-      <p id="pong-instructions" className="pong-instructions">鼠标或触控板直接滑动，无需按键。轻推回短球，快挥打长球。键盘可用方向键或 WASD，空格暂停。<span><VolumeX size={13} />静音球馆</span></p>
+      <p id="pong-instructions" className="pong-instructions">整页都可以滑动挥拍。锁定鼠标后可连续挥动，空格暂停并释放鼠标。键盘可用方向键或 WASD。<span><VolumeX size={13} />静音球馆</span></p>
+      {lockNotice && <p className="pong-live-message" role="status">{lockNotice}</p>}
       <p className="pong-live-message" role="status">{view.phase === 'rally' && running && view.serveCountdown > 0 ? '电脑准备发球' : view.phase === 'rally' && running ? `连续回击 ${view.rally} 次` : ''}</p>
     </div>
     <div className="pong-stats"><div><Flag size={18} /><span>本局实玩<strong>{duration(summary.playedMs / 1000)}</strong></span></div>

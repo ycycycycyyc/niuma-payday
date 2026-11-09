@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import camera from '../src/assets/pong-court/camera.json' with { type: 'json' };
 import { ballProjection, clampPlayerTarget, matchWinner, newPongGame, normalizePongSave, paddleProjection, PADDLE_HEIGHT, projectPong, servePong, stepPong, sweptPaddleContact, unprojectPong, type Difficulty, type PongBall, type PongState, type PongTarget, type Side } from '../src/lib/ping-pong.ts';
 
 const saved = (game = newPongGame()) => ({ version: 1, game, stats: { version: 1, wins: 2, matches: 3, bestRally: 17 }, playedMs: 15_000 });
@@ -149,7 +150,15 @@ test('physics bounds gaps and invalid target samples without mutating the previo
   assert.ok(tiny.elapsed > input.elapsed); assert.ok(Number.isFinite(tiny.playerVX));
 });
 
-test('the shared pointer inverse agrees with projected racket centers at all allowed depths', () => {
+test('the game projects Blender table and net landmarks and inverts racket positions across the playing area', () => {
+  const landmarks = [
+    [projectPong(-1, 0), camera.table.corners.nearLeft], [projectPong(1, 0), camera.table.corners.nearRight],
+    [projectPong(-1, 2), camera.table.corners.farLeft], [projectPong(1, 2), camera.table.corners.farRight],
+    [projectPong(0, 1, .155), camera.netTop.center],
+  ];
+  for (const [game, blender] of landmarks) {
+    assert.ok(Math.hypot(game.x - blender.x, game.y - blender.y) < .01);
+  }
   for (const point of [{ x: -1, y: -.12 }, { x: 0, y: .28 }, { x: 1.1, y: .90 }]) {
     const pixel = projectPong(point.x, point.y, PADDLE_HEIGHT);
     const inverse = unprojectPong(pixel.x, pixel.y);

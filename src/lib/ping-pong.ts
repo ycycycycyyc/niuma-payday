@@ -1,3 +1,5 @@
+import camera from '../assets/pong-court/camera.json' with { type: 'json' };
+
 export type Difficulty = 'easy' | 'normal' | 'hard';
 export type Side = 'player' | 'computer';
 export type PongTarget = { x: number; y: number };
@@ -12,7 +14,7 @@ export type PongState = {
   message: string; elapsed: number; effect: PongEffect | null;
 };
 export type PongStats = { version: 1; wins: number; matches: number; bestRally: number };
-export const PONG_CANVAS = { width: 900, height: 550 };
+export const PONG_CANVAS = { width: camera.width, height: camera.height };
 export const PADDLE_HEIGHT = .17;
 export const NET_HEIGHT = .155;
 export const PONG_PLAYER_BOUNDS = { xMin: -1.12, xMax: 1.12, yMin: -.12, yMax: .90 };
@@ -25,20 +27,34 @@ const OPTIONS = {
 };
 const opponent = (side: Side): Side => side === 'player' ? 'computer' : 'player';
 
-/** Rendering and collision share this logical canvas, independent of DPR. */
+// Blender exports the exact camera used to render the court and net.
+const [cameraX, cameraY, cameraW] = camera.matrix;
+function cameraDepth(x: number, y: number, z: number) {
+  return cameraW[0] * x + cameraW[1] * y + cameraW[2] * z + cameraW[3];
+}
 export function projectPong(x: number, y: number, z = 0) {
-  return { x: 450 + x * 373.5 * (1 - y * .16), y: 462 - y * 173.25 - z * 110 };
+  const depth = cameraDepth(x, y, z);
+  return {
+    x: (cameraX[0] * x + cameraX[1] * y + cameraX[2] * z + cameraX[3]) / depth,
+    y: (cameraY[0] * x + cameraY[1] * y + cameraY[2] * z + cameraY[3]) / depth,
+  };
 }
 export function unprojectPong(pixelX: number, pixelY: number, z = PADDLE_HEIGHT) {
-  const y = (462 - z * 110 - pixelY) / 173.25;
-  return { x: (pixelX - 450) / (373.5 * (1 - y * .16)), y };
+  // Intersect the pixel's camera ray with the racket's plane.
+  const a = cameraX[0] - pixelX * cameraW[0], b = cameraX[1] - pixelX * cameraW[1];
+  const c = cameraY[0] - pixelY * cameraW[0], d = cameraY[1] - pixelY * cameraW[1];
+  const offset = cameraW[2] * z + cameraW[3];
+  const rx = pixelX * offset - cameraX[2] * z - cameraX[3];
+  const ry = pixelY * offset - cameraY[2] * z - cameraY[3];
+  const determinant = a * d - b * c;
+  return { x: (rx * d - b * ry) / determinant, y: (a * ry - c * rx) / determinant };
 }
 export function paddleProjection(x: number, y: number) {
-  const depth = 1 - y * .16;
-  return { ...projectPong(x, y, PADDLE_HEIGHT), radiusX: 29 * depth, radiusY: 20 * depth };
+  const scale = cameraDepth(0, 0, PADDLE_HEIGHT) / cameraDepth(x, y, PADDLE_HEIGHT);
+  return { ...projectPong(x, y, PADDLE_HEIGHT), radiusX: 29 * scale, radiusY: 20 * scale };
 }
 export function ballProjection(x: number, y: number, z = 0) {
-  return { ...projectPong(x, y, z), radius: Math.max(3, 7.5 * (1 - y * .1)) };
+  return { ...projectPong(x, y, z), radius: 7.5 * cameraDepth(0, 0, 0) / cameraDepth(x, y, z) };
 }
 export function clampPlayerTarget(input: PongTarget, fallback: PongTarget = { x: 0, y: .28 }): PongTarget {
   return {

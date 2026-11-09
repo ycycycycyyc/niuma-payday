@@ -195,3 +195,219 @@ test('a normal computer opening serve can be returned by an actual mouse stroke 
   expect(saved.game.rally).toBe(1);
   expect(saved.game.player + saved.game.computer).toBe(0);
 });
+
+async function openStoppedClockGame(page: import('@playwright/test').Page) {
+  await page.clock.install({ time: new Date('2026-11-09T02:00:00Z') });
+  await page.goto('/?play=ping-pong');
+  await expect(page.getByRole('heading', { name: '来一局，乒乓。' })).toBeVisible();
+  await page.locator('.pong-surface canvas').scrollIntoViewIfNeeded();
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 1000));
+  const box = await page.locator('.pong-surface canvas').boundingBox();
+  expect(box).not.toBeNull();
+  return box!;
+}
+
+test('window-wide pointer tracking continues outside the canvas and reverses immediately at the paddle boundary', async ({ page }) => {
+  const box = await openStoppedClockGame(page);
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await page.evaluate(() => {
+      const trace: { trusted: boolean; x: number; y: number; outsideCanvas: boolean }[] = [];
+      (window as unknown as { pongPointerTrace: typeof trace }).pongPointerTrace = trace;
+      document.addEventListener('pointermove', event => {
+        const canvas = document.querySelector('.pong-surface canvas')!.getBoundingClientRect();
+        trace.push({ trusted: event.isTrusted, x: event.clientX, y: event.clientY,
+          outsideCanvas: event.clientX < canvas.left || event.clientX > canvas.right || event.clientY < canvas.top || event.clientY > canvas.bottom });
+      }, { passive: true });
+    });
+    const move = async (x: number, y: number, wait = 64) => {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0, pointerType: 'mouse' });
+      await page.clock.runFor(wait);
+    };
+    const start = projectPong(0, .28, PADDLE_HEIGHT);
+    const surface = page.getByRole('group', { name: '乒乓球操作区' });
+    const centerX = box.x + box.width / 2;
+    const outsideY = box.y - 12;
+    const rightX = Math.min(page.viewportSize()!.width - 10, box.x + box.width + 24);
+    expect(outsideY).toBeGreaterThan(0);
+    // Replay complete independent gestures and read their real paused saves.
+    // A boundary reversal is never interrupted by a pause, and no visual color is assumed.
+    const trajectory = async (stage: number) => {
+      if (stage > 0) {
+        await page.getByRole('button', { name: '重新开始', exact: true }).click();
+        await page.getByRole('dialog').getByRole('button', { name: '重新开始', exact: true }).click();
+      }
+      await move(box.x + start.x / PONG_CANVAS.width * box.width, box.y + start.y / PONG_CANVAS.height * box.height, 16);
+      await surface.focus();
+      await page.keyboard.press('Space');
+      await page.clock.runFor(16);
+      await move(centerX, outsideY, 160);
+      if (stage >= 1) await move(rightX, outsideY, 256);
+      if (stage >= 2) await move(rightX - 30, outsideY, 64);
+      if (stage >= 3) await move(centerX, outsideY, 384);
+      if (stage >= 4) await move(centerX, box.y + 5, 64);
+      await expect(surface).toHaveAttribute('data-running', 'true');
+      await page.keyboard.press('Space');
+      const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), GAME_KEY);
+      return { x: saved.game.playerX as number, y: saved.game.playerY as number };
+    };
+    const outside = await trajectory(0);
+    const observed = await page.evaluate(() => (window as unknown as { pongPointerTrace: { trusted: boolean; outsideCanvas: boolean }[] }).pongPointerTrace);
+    expect(observed.some(event => event.trusted && event.outsideCanvas)).toBe(true);
+    await test.info().attach('outside-canvas-position', { body: JSON.stringify({ box, outside, outsidePoint: { x: centerX, y: outsideY }, trace: observed }, null, 2), contentType: 'application/json' });
+    expect(outside.y, 'trusted movement above the canvas must continue moving the racket forward').toBeGreaterThan(.58);
+    const edge = await trajectory(1);
+    expect(edge.x).toBeGreaterThan(1.05);
+    const reversed = await trajectory(2);
+    expect(reversed.x, 'the first reverse movement must take effect while the system pointer is still outside the canvas').toBeLessThan(edge.x - .035);
+    const beforeReentry = await trajectory(3);
+    const afterReentry = await trajectory(4);
+    const beforeScreen = projectPong(beforeReentry.x, beforeReentry.y, PADDLE_HEIGHT);
+    const afterScreen = projectPong(afterReentry.x, afterReentry.y, PADDLE_HEIGHT);
+    expect(Math.abs(afterScreen.x - beforeScreen.x), `vertical re-entry must not teleport: ${JSON.stringify({ beforeReentry, afterReentry, beforeScreen, afterScreen })}`).toBeLessThan(3);
+    expect(afterReentry.y).toBeLessThan(beforeReentry.y - .02);
+    const trace = await page.evaluate(() => (window as unknown as { pongPointerTrace: { trusted: boolean; outsideCanvas: boolean }[] }).pongPointerTrace);
+    expect(trace.some(event => event.trusted && event.outsideCanvas)).toBe(true);
+    expect(trace.every(event => event.trusted)).toBe(true);
+    await test.info().attach('window-pointer-reversal', { body: JSON.stringify({ edge, reversed, beforeReentry, afterReentry, trace }, null, 2), contentType: 'application/json' });
+  } finally { await cdp.detach(); }
+});
+
+test('leaving the browser viewport pauses trusted pointer play and normal controls remain available', async ({ page }) => {
+  const box = await openStoppedClockGame(page);
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const center = projectPong(0, .28, PADDLE_HEIGHT);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x + center.x / PONG_CANVAS.width * box.width,
+      y: box.y + center.y / PONG_CANVAS.height * box.height, buttons: 0, pointerType: 'mouse' });
+    const surface = page.getByRole('group', { name: '乒乓球操作区' });
+    await surface.focus();
+    await page.keyboard.press('Space');
+    await page.clock.runFor(32);
+    await expect(surface).toHaveAttribute('data-running', 'true');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: -20, y: -20, buttons: 0, pointerType: 'mouse' });
+    await page.clock.runFor(32);
+    await expect(surface).toHaveAttribute('data-running', 'false');
+    const left = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: page.viewportSize()!.width - 15, y: 25, buttons: 0, pointerType: 'mouse' });
+    await surface.focus();
+    await page.keyboard.press('Space');
+    await page.clock.runFor(16);
+    await page.keyboard.press('Space');
+    const reentered = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
+    expect(reentered.playerX).toBeCloseTo(left.playerX, 6);
+    expect(reentered.playerY).toBeCloseTo(left.playerY, 6);
+    await page.getByRole('button', { name: '继续比赛', exact: false }).first().click();
+    await expect(surface).toHaveAttribute('data-running', 'true');
+    await page.getByRole('button', { name: '重新开始', exact: true }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.getByRole('button', { name: '继续这局', exact: true }).click();
+    const baseline = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
+    const horizontal = baseline.playerX > 0 ? 'ArrowLeft' : 'ArrowRight';
+    const vertical = baseline.playerY > .35 ? 'ArrowDown' : 'ArrowUp';
+    await surface.focus();
+    await page.keyboard.press('Space');
+    await page.keyboard.down(horizontal);
+    await page.keyboard.down(vertical);
+    await page.clock.runFor(48);
+    await page.keyboard.up(horizontal);
+    await page.keyboard.up(vertical);
+    await page.keyboard.press('Space');
+    const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), GAME_KEY);
+    expect((saved.game.playerX - baseline.playerX) * (horizontal === 'ArrowRight' ? 1 : -1)).toBeGreaterThan(.05);
+    expect((saved.game.playerY - baseline.playerY) * (vertical === 'ArrowUp' ? 1 : -1)).toBeGreaterThan(.05);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('heading', { name: '今日薪动' })).toBeVisible();
+    await expect(page).not.toHaveURL(/play=ping-pong/);
+  } finally { await cdp.detach(); }
+});
+
+test('optional mouse lock accepts relative movement and releases on pause or Escape', async ({ page }) => {
+  const box = await openStoppedClockGame(page);
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await page.evaluate(() => {
+      const trace: { locked: boolean; trusted: boolean; dx: number; dy: number }[] = [];
+      (window as unknown as { pongLockedTrace: typeof trace }).pongLockedTrace = trace;
+      document.addEventListener('pointermove', event => trace.push({ locked: Boolean(document.pointerLockElement), trusted: event.isTrusted, dx: event.movementX, dy: event.movementY }), { passive: true });
+    });
+    const point = projectPong(0, .28, PADDLE_HEIGHT);
+    const anchor = { x: box.x + point.x / PONG_CANVAS.width * box.width, y: box.y + point.y / PONG_CANVAS.height * box.height };
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...anchor, buttons: 0, pointerType: 'mouse' });
+    const surface = page.getByRole('group', { name: '乒乓球操作区' });
+    await surface.focus();
+    await page.keyboard.press('Space');
+    await page.clock.runFor(16);
+    await page.keyboard.press('Space');
+    const baseline = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
+    await page.keyboard.press('Space');
+    // Keyboard activation provides a real user gesture without moving the racket to the toolbar first.
+    await page.getByRole('button', { name: '锁定鼠标', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => page.evaluate(() => Boolean(document.pointerLockElement)
+      || document.body.textContent!.includes('当前窗口不能锁定鼠标'))).toBe(true);
+    const acquired = await page.evaluate(() => Boolean(document.pointerLockElement));
+    if (!acquired) {
+      test.info().annotations.push({ type: 'pointer-lock', description: 'Chrome declined pointer lock; the visible whole-window fallback was verified.' });
+      await expect(page.getByText('当前窗口不能锁定鼠标，仍可在整页滑动挥拍。', { exact: true })).toBeVisible();
+    } else await expect(page.getByRole('button', { name: '鼠标已锁定', exact: true })).toBeDisabled();
+
+    for (const offset of [{ x: 40, y: -15 }, { x: 90, y: -35 }]) {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: anchor.x + offset.x, y: anchor.y + offset.y, buttons: 0, pointerType: 'mouse' });
+      await page.clock.runFor(32);
+    }
+    await surface.focus();
+    await page.keyboard.press('Space');
+    await expect(surface).toHaveAttribute('data-running', 'false');
+    await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
+    const moved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!).game, GAME_KEY);
+    const motion = await page.evaluate(() => (window as unknown as { pongLockedTrace: { locked: boolean; trusted: boolean; dx: number; dy: number }[] }).pongLockedTrace);
+    expect(Math.hypot(moved.playerX - baseline.playerX, moved.playerY - baseline.playerY), `actual pointer-lock motion: ${JSON.stringify({ acquired, motion })}`).toBeGreaterThan(.05);
+
+    await surface.focus();
+    await page.keyboard.press('Space');
+    if (acquired) {
+      await page.getByRole('button', { name: '锁定鼠标', exact: true }).focus();
+      await page.keyboard.press('Enter');
+      await expect.poll(() => page.evaluate(() => Boolean(document.pointerLockElement))).toBe(true);
+    }
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('heading', { name: '今日薪动' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
+    const trace = await page.evaluate(() => (window as unknown as { pongLockedTrace: { locked: boolean; trusted: boolean; dx: number; dy: number }[] }).pongLockedTrace);
+    await test.info().attach('mouse-lock-result', { body: JSON.stringify({ acquired, baseline: { x: baseline.playerX, y: baseline.playerY }, moved: { x: moved.playerX, y: moved.playerY }, trace }), contentType: 'application/json' });
+  } finally { await cdp.detach(); }
+});
+
+test.describe('touch strokes', () => {
+  test.use({ hasTouch: true });
+  test('a real touch stroke returns the ball and lifting a finger keeps the game running', async ({ page }) => {
+    await prepareIncomingBall(page);
+    const box = await page.locator('.pong-surface canvas').boundingBox();
+    const cdp = await page.context().newCDPSession(page);
+    const point = (y: number) => {
+      const projected = projectPong(0, y, PADDLE_HEIGHT);
+      return { x: box!.x + projected.x / PONG_CANVAS.width * box!.width, y: box!.y + projected.y / PONG_CANVAS.height * box!.height, id: 1 };
+    };
+    try {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(.16)] });
+      const surface = page.getByRole('group', { name: '乒乓球操作区' });
+      await surface.focus();
+      await page.keyboard.press('Space');
+      await page.clock.runFor(16);
+      for (const y of [.22, .30, .38, .46]) {
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(y)] });
+        await page.clock.runFor(16);
+        if (await surface.getAttribute('data-hitter') === 'player') break;
+      }
+      await expect(surface).toHaveAttribute('data-hitter', 'player');
+      await expect(surface).toHaveAttribute('data-rally', '1');
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await expect(surface).toHaveAttribute('data-running', 'true');
+      await page.keyboard.press('Space');
+      const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), GAME_KEY);
+      expect(saved.game.ball.hitter).toBe('player');
+      expect(saved.game.ball.vy).toBeGreaterThan(0);
+    } finally { await cdp.detach(); }
+  });
+});

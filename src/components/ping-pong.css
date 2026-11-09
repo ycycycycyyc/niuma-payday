@@ -8,10 +8,10 @@
 .pong-scoreboard > div { display: flex; gap: 12px; align-items: center; font-size: 13px; }
 .pong-scoreboard strong { font: 600 38px/1.2 var(--font-digits, sans-serif); min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
 .pong-score-separator { color: #c5a7b9; font-size: 25px; }
-.pong-player-dot, .pong-computer-dot { width: 8px; height: 8px; border-radius: 50%; background: #b7577d; }
-.pong-computer-dot { background: #d6bc83; }
+.pong-player-dot, .pong-computer-dot { width: 8px; height: 8px; border-radius: 50%; background: #bd3946; }
+.pong-computer-dot { background: #303237; }
 .pong-rules { position: absolute; right: 22px; font-size: 10px; color: var(--muted); }
-.pong-surface { position: relative; display: grid; place-items: center; isolation: isolate; background: #f9f3f5; outline-offset: -4px; user-select: none; -webkit-user-select: none; }
+.pong-surface { position: relative; display: grid; place-items: center; isolation: isolate; background: #263139; outline-offset: -4px; user-select: none; -webkit-user-select: none; }
 .pong-surface:focus-visible { outline: 3px solid var(--accent); }
 .pong-surface canvas { display: block; width: 100%; max-width: max(300px, calc((100dvh - 340px) * 1.63636)); aspect-ratio: 900 / 550; touch-action: none; cursor: crosshair; }
 .pong-surface[data-running="true"] canvas { cursor: none; }
@@ -20,7 +20,7 @@
 .pong-overlay h3 { font-size: clamp(15px, 2.3vw, 23px); max-width: 90%; padding: 8px 16px; border-radius: 12px; background: #fff9f4f2; }
 .pong-overlay > .button { min-height: 42px; padding-inline: 24px; box-shadow: 0 4px 14px #75465b18; }
 .pong-toolbar { padding: 17px 21px; display: flex; justify-content: space-between; gap: 12px; align-items: center; border-top: 1px solid #ecdde5; }
-.pong-main-controls { display: flex; gap: 10px; }
+.pong-main-controls { display: flex; flex-wrap: wrap; gap: 10px; }
 .pong-difficulty { display: flex; gap: 10px; align-items: center; font-size: 11px; }
 .pong-difficulty select { padding: 8px 10px; border: 1px solid #e2cbd7; border-radius: 8px; background: #fffafd; color: var(--pong-ink); font-size: 12px; }
 .pong-difficulty select:disabled { opacity: .65; }

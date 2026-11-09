@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "provenance": "Editable Blender geometry; procedural materials; no external image textures.",
+  "alignment": "Map centerX/centerY and radiusX/radiusY to the engine projection. Handle is outside contact ellipse.",
+  "player": {
+    "file": "player.png",
+    "width": 512,
+    "height": 512,
+    "centerX": 256.0,
+    "centerY": 209.9936,
+    "radiusX": 115.2,
+    "radiusY": 80.5148,
+    "contact": "rubber face",
+    "handleDirection": "near"
+  },
+  "computer": {
+    "file": "computer.png",
+    "width": 512,
+    "height": 512,
+    "centerX": 256.0,
+    "centerY": 217.6809,
+    "radiusX": 115.2,
+    "radiusY": 80.5148,
+    "contact": "rubber face",
+    "handleDirection": "far"
+  },
+  "ball": {
+    "file": "ball.png",
+    "width": 256,
+    "height": 256,
+    "centerX": 128.0,
+    "centerY": 128.0003,
+    "radiusX": 98.4615,
+    "radiusY": 98.445,
+    "contact": "sphere silhouette",
+    "handleDirection": null
+  }
+}
