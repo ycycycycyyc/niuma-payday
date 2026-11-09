@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Flag, Pause, Play, RotateCcw, Trophy, VolumeX } from 'lucide-react';
-import { matchWinner, newPongGame, normalizePongSave, servePong, stepPong, type Difficulty, type PongState, type PongStats } from '../lib/ping-pong';
-import { drawPong, pongCanvasSize } from '../lib/ping-pong-draw';
+import { clampPlayerTarget, matchWinner, newPongGame, normalizePongSave, PONG_CANVAS, servePong, stepPong, unprojectPong, type Difficulty, type PongStats } from '../lib/ping-pong';
+import { drawPong } from '../lib/ping-pong-draw';
 import { duration, currencySymbol, money } from '../lib/clock';
 import { earningsBetween, type SalarySettings } from '../lib/salary';
 import type { CalendarCache } from '../../shared/calendar.mjs';
@@ -9,6 +9,8 @@ import './ping-pong.css';
 
 const SAVE_KEY = 'niuma.ping-pong.v1';
 const labels: Record<Difficulty, string> = { easy: '轻松', normal: '刚刚好', hard: '来点挑战' };
+const movementKeys = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyA', 'KeyD', 'KeyW', 'KeyS']);
+const limit = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 type Props = { settings: SalarySettings; calendar: CalendarCache; privacy: boolean; demo: boolean; active?: boolean; onExit: () => void };
 
 function readGame() {
@@ -32,7 +34,8 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
   const restartDialog = useRef<HTMLDialogElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const surface = useRef<HTMLDivElement>(null);
-  const target = useRef(initial.game.playerX);
+  const target = useRef({ x: initial.game.playerX, y: initial.game.playerY });
+  const strokeSamples = useRef<{ time: number; target: { x: number; y: number } }[]>([]);
   const keys = useRef(new Set<string>());
   const reduced = useRef(false);
   const income = useRef({ settings, calendar, demo });
@@ -67,6 +70,8 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     runningRef.current = false;
     segment.current = null;
     keys.current.clear();
+    strokeSamples.current.length = 0;
+    target.current = { x: game.current.playerX, y: game.current.playerY };
     setRunning(false);
     setView({ ...game.current });
     persist();
@@ -101,7 +106,7 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     const resize = () => {
       const dpr = Math.min(2, devicePixelRatio || 1);
       el.width = Math.round(el.clientWidth * dpr);
-      el.height = Math.round(el.width * pongCanvasSize.height / pongCanvasSize.width);
+      el.height = Math.round(el.width * PONG_CANVAS.height / PONG_CANVAS.width);
       drawPong(el, game.current, reduced.current);
     };
     const observer = new ResizeObserver(resize); observer.observe(el); resize();
@@ -125,7 +130,7 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
       if (event.key === 'Escape') { event.preventDefault(); pause(); onExitRef.current(); return; }
       if ((event.target as HTMLElement)?.closest('select, input, button, dialog')) return;
       if (event.code === 'Space') { event.preventDefault(); if (!event.repeat) runningRef.current ? pause() : start(); }
-      if (['ArrowLeft', 'ArrowRight', 'KeyA', 'KeyD'].includes(event.code)) { event.preventDefault(); keys.current.add(event.code); }
+      if (movementKeys.has(event.code)) { event.preventDefault(); keys.current.add(event.code); }
     };
     const up = (event: KeyboardEvent) => keys.current.delete(event.code);
     window.addEventListener('keydown', keyboard); window.addEventListener('keyup', up);
@@ -136,11 +141,28 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
     let raf = 0, previous = performance.now(), lastUi = previous;
     const frame = (now: number) => {
       if (!runningRef.current) return;
-      const dt = Math.max(0, Math.min(.05, (now - previous) / 1000)); previous = now;
-      if (keys.current.has('ArrowLeft') || keys.current.has('KeyA')) target.current = Math.max(-.88, target.current - dt * 2.3);
-      if (keys.current.has('ArrowRight') || keys.current.has('KeyD')) target.current = Math.min(.88, target.current + dt * 2.3);
+      const frameStart = Math.min(now, Math.max(previous, now - 50));
+      const dt = (now - frameStart) / 1000;
+      previous = now;
       const old = game.current;
-      game.current = stepPong(old, dt, target.current);
+      const held = keys.current;
+      if (held.size) {
+        const dx = Number(held.has('ArrowRight') || held.has('KeyD')) - Number(held.has('ArrowLeft') || held.has('KeyA'));
+        const dy = Number(held.has('ArrowUp') || held.has('KeyW')) - Number(held.has('ArrowDown') || held.has('KeyS'));
+        target.current = clampPlayerTarget({ x: target.current.x + dx * dt * 2.4, y: target.current.y + dy * dt * 2.4 });
+        game.current = stepPong(game.current, dt, target.current);
+      } else {
+        // A quick out-and-back stroke can contain several pointer samples in
+        // one paint. Advance the ball and racket along the recorded path.
+        let cursor = frameStart;
+        for (const sample of strokeSamples.current) {
+          const end = limit(sample.time, cursor, now);
+          game.current = stepPong(game.current, (end - cursor) / 1000, sample.target);
+          cursor = end;
+        }
+        game.current = stepPong(game.current, (now - cursor) / 1000, target.current);
+      }
+      strokeSamples.current.length = 0;
       if (canvas.current) drawPong(canvas.current, game.current, reduced.current);
       if (game.current.phase !== 'rally') {
         if (game.current.phase === 'finished' && old.phase !== 'finished') {
@@ -149,7 +171,10 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
         } else stats.current.bestRally = Math.max(stats.current.bestRally, game.current.bestRally);
         pause(); return;
       }
+      const hit = old.rally !== game.current.rally;
+      const launched = old.serveCountdown > 0 && game.current.serveCountdown <= 0;
       if (now - lastUi >= 1000) { settleTime(); setView({ ...game.current }); lastUi = now; }
+      else if (hit || launched) setView({ ...game.current });
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -169,46 +194,64 @@ function PingPongGame({ settings, calendar, privacy, demo, active = true, onExit
 
   const restart = (difficulty = game.current.difficulty) => {
     pause();
-    game.current = newPongGame(difficulty); target.current = 0; playedMs.current = 0; earned.current = 0;
+    game.current = newPongGame(difficulty);
+    target.current = { x: game.current.playerX, y: game.current.playerY };
+    playedMs.current = 0; earned.current = 0;
     setView(game.current); setSummary({ playedMs: 0, earned: 0, stats: { ...stats.current } });
     setRestartOpen(false); persist();
     if (canvas.current) drawPong(canvas.current, game.current, reduced.current);
   };
-  const pointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const pointer = (event: React.PointerEvent<HTMLCanvasElement>, pickup = false) => {
+    if (!event.isPrimary) return;
     const box = event.currentTarget.getBoundingClientRect();
-    target.current = Math.max(-.88, Math.min(.88, (event.clientX - box.left - box.width / 2) / (box.width * .415)));
-    if (!runningRef.current && game.current.phase !== 'finished') {
-      game.current.playerX = target.current;
-      if (game.current.phase === 'ready') game.current.ball.x = target.current;
+    if (!box.width || !box.height) return;
+    if (!runningRef.current && game.current.phase === 'rally') return;
+    const input = event.nativeEvent;
+    const coalesced = runningRef.current && !pickup ? input.getCoalescedEvents?.() : undefined;
+    const events = coalesced?.length ? coalesced : [input];
+    for (const sample of events) {
+      const world = unprojectPong(
+        (sample.clientX - box.left) * PONG_CANVAS.width / box.width,
+        (sample.clientY - box.top) * PONG_CANVAS.height / box.height,
+      );
+      target.current = clampPlayerTarget(world);
+      if (runningRef.current && !pickup) strokeSamples.current.push({ time: sample.timeStamp, target: target.current });
+    }
+    if (strokeSamples.current.length > 64) strokeSamples.current.splice(0, strokeSamples.current.length - 64);
+    // Entering the court (or touching it again) places the racket at rest.
+    // Only subsequent motion can supply a stroke.
+    if (pickup || !runningRef.current) {
+      strokeSamples.current.length = 0;
+      game.current = { ...game.current, playerX: target.current.x, playerY: target.current.y, playerVX: 0, playerVY: 0, playerSwing: 0 };
       drawPong(event.currentTarget, game.current, reduced.current);
     }
   };
-  const mainLabel = view.phase === 'finished' ? '再来一局' : running ? '暂停比赛' : view.phase === 'rally' ? '继续比赛' : view.phase === 'point' ? '继续发球' : '开始比赛';
+  const mainLabel = view.phase === 'finished' ? '再来一局' : running ? '暂停比赛' : view.phase === 'rally' ? '继续比赛' : view.phase === 'point' ? '接下一球' : '开始比赛';
 
   return <section className="pong-game" aria-labelledby="pong-title">
-    <header className="pong-header"><div><span className="pong-eyebrow">快乐实验室 / 摸鱼球馆</span><h2 id="pong-title">来一局，乒乓。</h2><p>让球来回，让时间慢一点。</p></div>
+    <header className="pong-header"><div><h2 id="pong-title">来一局，乒乓。</h2><p>等球在你这边弹起，向球网方向挥拍。斜着挥可以打向两侧。</p></div>
       <button className="button secondary" onClick={() => { pause(); onExit(); }}><ArrowLeft size={16} />收起回工资页 <kbd>Esc</kbd></button></header>
     <div className="pong-panel">
       <div className="pong-scoreboard" aria-label={`比赛比分：你 ${view.player}，电脑 ${view.computer}`}>
         <div><span className="pong-player-dot" />你<strong data-testid="pong-player-score">{view.player}</strong></div><span className="pong-score-separator">:</span><div><strong data-testid="pong-computer-score">{view.computer}</strong>电脑<span className="pong-computer-dot" /></div>
         <span className="pong-rules">11 分制 · 领先 2 分获胜</span>
       </div>
-      <div className="pong-surface" ref={surface} tabIndex={0} role="group" aria-label="乒乓球操作区" aria-describedby="pong-instructions" data-running={running} data-phase={view.phase}>
-        <canvas ref={canvas} aria-label="乒乓球台：你控制下方球拍，电脑在上方" role="img" onPointerMove={pointer}
-          onPointerDown={event => { pointer(event); event.currentTarget.setPointerCapture(event.pointerId); if (!runningRef.current) start(); }} />
-        {!running && <div className="pong-overlay"><span className="pong-overlay-tag">{view.phase === 'finished' ? '本局结束' : view.phase === 'rally' ? '暂停一下' : '随时开球'}</span>
-          <h3>{view.phase === 'ready' ? '今天的快乐，从发球开始。' : view.message}</h3>
-          <p>{view.phase === 'finished' ? '胜负先放一边，快乐再来一局。' : '移动鼠标或触控板，球拍会跟着你。'}</p>
+      <div className="pong-surface" ref={surface} tabIndex={0} role="group" aria-label="乒乓球操作区" aria-describedby="pong-instructions" data-running={running} data-phase={view.phase} data-rally={view.rally} data-hitter={view.ball.hitter}>
+        <canvas ref={canvas} aria-label="乒乓球台：你控制下方球拍，电脑在上方" role="img"
+          onPointerMove={event => pointer(event)} onPointerEnter={event => pointer(event, true)}
+          onPointerDown={event => { pointer(event, true); event.currentTarget.setPointerCapture(event.pointerId); surface.current?.focus(); }} />
+        {!running && <div className="pong-overlay">
+          <h3>{view.phase === 'ready' ? '准备接发球' : view.phase === 'rally' ? '比赛已暂停' : view.message}</h3>
           <button className="button primary" onClick={() => view.phase === 'finished' ? restart() : start()}><Play size={16} />{mainLabel}</button>
         </div>}
       </div>
-      <div className="pong-toolbar"><div className="pong-main-controls"><button className="button primary" onClick={() => view.phase === 'finished' ? restart() : running ? pause() : start()}>{running ? <Pause size={16} /> : <Play size={16} />}{mainLabel}<kbd>Space</kbd></button>
+      <div className="pong-toolbar"><div className="pong-main-controls">{running && <button className="button primary" onClick={pause}><Pause size={16} />暂停比赛<kbd>Space</kbd></button>}
         <button className="button secondary" onClick={() => { pause(); setRestartOpen(true); }}><RotateCcw size={15} />重新开始</button></div>
         <label className="pong-difficulty">电脑难度<select aria-label="乒乓球电脑难度" value={view.difficulty} disabled={view.phase !== 'ready' || view.player + view.computer > 0}
           onChange={event => restart(event.target.value as Difficulty)}>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
-      <p id="pong-instructions" className="pong-instructions">鼠标 / 触控板移动球拍，也可用 ← → 或 A D。自动辅助挥拍；空格暂停，切到后台自动暂停。<span><VolumeX size={13} />静音球馆</span></p>
-      <p className="pong-live-message" role="status">{view.phase === 'rally' ? running ? `本轮已连续回击 ${view.rally} 次` : '比赛已暂停，回来继续。' : view.message}</p>
+      <p id="pong-instructions" className="pong-instructions">鼠标或触控板直接滑动，无需按键。轻推回短球，快挥打长球。键盘可用方向键或 WASD，空格暂停。<span><VolumeX size={13} />静音球馆</span></p>
+      <p className="pong-live-message" role="status">{view.phase === 'rally' && running && view.serveCountdown > 0 ? '电脑准备发球' : view.phase === 'rally' && running ? `连续回击 ${view.rally} 次` : ''}</p>
     </div>
     <div className="pong-stats"><div><Flag size={18} /><span>本局实玩<strong>{duration(summary.playedMs / 1000)}</strong></span></div>
       <div><span className="pong-income-symbol">{currencySymbol(settings.currency)}</span><span>本次打开期间预估收入<strong>{privacy ? '••••' : demo ? '体验模式' : `${currencySymbol(settings.currency)}${money(summary.earned)}`}</strong></span></div>

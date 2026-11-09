@@ -21,6 +21,7 @@ import './components/ping-pong.css';
 const PingPongGame = lazy(() => import('./components/PingPongGame'));
 
 type Page = 'dashboard' | 'playground' | 'achievements';
+const opensPingPong = () => new URLSearchParams(window.location.search).get('play') === 'ping-pong';
 const compactFigure = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumSignificantDigits: 3 });
 const cardFigure = (value: number, digits = 0) => value >= 10_000 ? compactFigure.format(value) : money(value, digits);
 const quotes = [
@@ -53,8 +54,14 @@ function App() {
   const [state, setState] = useState<AppState>(DEFAULT_STATE);
   const [loaded, setLoaded] = useState(false);
   const [profileError, setProfileError] = useState('');
-  const [page, setPage] = useState<Page>('dashboard');
-  const [gameOpen, setGameOpen] = useState(false);
+  const [page, setPage] = useState<Page>(() => opensPingPong() ? 'playground' : 'dashboard');
+  const [gameOpen, setGameOpen] = useState(opensPingPong);
+  useEffect(() => {
+    if (gameOpen || !opensPingPong()) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('play');
+    window.history.replaceState(window.history.state, '', url);
+  }, [gameOpen]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const openSalarySettings = useCallback(() => setSettingsOpen(true), []);
   const saveSavingsEntry = useCallback(async (entry: SavingsEntry, previous: SavingsEntry | null) => {
@@ -280,7 +287,7 @@ function App() {
           
         </>}
 
-        {page === 'playground' && <section className="pong-launch"><div><span className="pong-launch-tag">NEW · 摸鱼球馆</span><h2>来一局，乒乓。</h2><p>和电脑过几招。鼠标移动球拍，随时收起，下次继续。</p></div><button className="button primary" onClick={() => setGameOpen(true)}>来打乒乓球<ArrowUpRight size={16} /></button></section>}
+        {page === 'playground' && <section className="pong-launch"><div><h2>来一局，乒乓。</h2><p>等球弹起，滑动鼠标或触控板，把球打向你瞄准的一侧。</p></div><button className="button primary" onClick={() => setGameOpen(true)}>来打乒乓球<ArrowUpRight size={16} /></button></section>}
 
         {page === 'playground' && <div className="playground-grid"><section className="conversion-card"><h2>今天的努力，可以换成…</h2><p className="muted">换个单位，看见打工的快乐。</p><div className="conversion-items">{[{ label: '杯快乐咖啡', price: 25, icon: Coffee }, { label: '顿好好吃饭', price: 35, icon: Heart }, { label: '次轻松通勤', price: 10, icon: Zap }].map(item => <div key={item.label}><item.icon size={27} /><strong title={state.privacy ? undefined : money(salary.todayEarned / item.price, 1)}>{state.privacy ? '••' : cardFigure(salary.todayEarned / item.price, 1)}</strong><span>{item.label}</span><small>按 {symbol}{item.price} / 份估算</small></div>)}</div></section>{restCard}<section className="lab-quote"><Sparkles size={25} /><div><h2>{quotes[quote][0]}</h2><p>{quotes[quote][1]}</p></div><button className="button secondary" onClick={() => setQuote(v => (v + 1) % quotes.length)}>换一句<ArrowRight size={16} /></button></section><section className="lab-goal"><Target size={25} /><h2>下一个小快乐，由你定义。</h2><p>把咖啡、电影票或一顿大餐，变成看得见的期待。</p><button className="button primary" onClick={() => setGoalOpen(true)}><Plus size={16} />定个小目标</button></section><section className="lab-widget"><Monitor size={25} /><h2>小窗口，大动力。</h2><p>让跳动的工资，在你的桌面悄悄陪伴。</p><button className="button secondary" onClick={() => void action(openWidget, 'widget')}>打开悬浮窗<ArrowUpRight size={16} /></button></section></div>}
 
