@@ -3,7 +3,9 @@ import { normalizeCalendarCache, type CalendarCache } from '../../shared/calenda
 import { isDesktopHost } from './desktop-error';
 import type { PetLaunchPose } from './pet-motion';
 import { migrateLegacyProfile } from '../../shared/profile-migration.mjs';
-import { normalizeSavingsLedger, recordSavingsEntry, sameSavingsEntry, type SavingsEntry, type SavingsLedger } from '../../shared/savings.mjs';
+import { normalizeSavingsLedger, recordSavingsEntry, removeSavingsEntry, sameSavingsEntry, type SavingsEntry, type SavingsLedger } from '../../shared/savings.mjs';
+import { createProfileBackup, isProfileDocument, parseProfileBackup, profileRevision, type ProfileBackup, type ProfileRecovery } from '../../shared/profile-backup.mjs';
+import { applyDayOverridePatch, type DayOverridePatch } from '../../shared/day-overrides.mjs';
 
 export type AppState = { version: 3; configured: boolean; settings: SalarySettings; goal: { name: string; amount: number }; privacy: boolean; calendar: CalendarCache; savings: SavingsLedger };
 export type WidgetLayer = 'top' | 'bottom';
@@ -18,6 +20,11 @@ declare global {
       getState(): Promise<unknown>;
       setState(state: unknown): Promise<unknown>;
       writeSavingsEntry?(entry: SavingsEntry, previous: SavingsEntry | null): Promise<unknown>;
+      writeDayOverrides?(patch: DayOverridePatch, expected?: DayOverridePatch): Promise<unknown>;
+      deleteSavingsEntry?(previous: SavingsEntry): Promise<unknown>;
+      getProfileRecovery?(): Promise<ProfileRecovery>;
+      exportProfileBackup?(): Promise<ProfileBackup>;
+      importProfileBackup?(document: ProfileBackup, expectedRevision: string): Promise<unknown>;
       setPrivacy?(hidden: boolean): Promise<boolean>;
       onStateChanged(callback: (state: unknown) => void): () => void;
       refreshCalendar(): Promise<{ status: string; message: string; calendar: CalendarCache }>;
@@ -102,10 +109,69 @@ export async function readState() {
   return readBrowserState();
 }
 
+const browserRecovery = new WeakMap<Storage, ProfileRecovery>();
+const browserQuarantine = new WeakMap<Storage, string>();
+const normalRecovery: ProfileRecovery = { status: 'normal', message: '资料保存在本机，自动保留最近 3 次有效存档。' };
+
+function preserveBrowserText(text: string) {
+  if (browserQuarantine.get(localStorage) === text) return;
+  try {
+    localStorage.setItem(`${KEY}.corrupt.${Date.now()}`, text);
+    browserQuarantine.set(localStorage, text);
+    browserRecovery.set(localStorage, { status: 'preserved', message: '检测到资料异常，原内容已单独保留。可导入备份，或重新填写工资设置。' });
+  } catch {
+    browserRecovery.set(localStorage, { status: 'blocked', message: '资料异常且无法保留原内容，已停止写入。请检查浏览器存储空间与权限。' });
+    throw new Error('[PROFILE_RECOVERY_REQUIRED] 无法保护原资料，已停止写入。');
+  }
+}
+
 function readBrowserState(): AppState {
   const text = localStorage.getItem(KEY) ?? localStorage.getItem('niuma.payday.v2') ?? localStorage.getItem('niuma.payday.v1');
-  if (!text) return structuredClone(DEFAULT_STATE);
-  try { return normalizeState(JSON.parse(text)); } catch { return structuredClone(DEFAULT_STATE); }
+  if (text !== null) {
+    try {
+      const parsed = migrateLegacyProfile(JSON.parse(text));
+      if (isProfileDocument(parsed)) return normalizeState(parsed);
+    } catch { /* Preserve the exact source, including an empty string, before using a fallback. */ }
+    try { preserveBrowserText(text); } catch { return structuredClone(DEFAULT_STATE); }
+  }
+  for (let index = 1; index <= 3; index++) {
+    const backup = localStorage.getItem(`${KEY}.backup.${index}`);
+    if (!backup) continue;
+    try {
+      const parsed = migrateLegacyProfile(JSON.parse(backup));
+      if (!isProfileDocument(parsed)) continue;
+      browserRecovery.set(localStorage, { status: 'recovered', message: text === null
+        ? '主资料缺失，已恢复最近一次有效存档。请核对工资与月度记录。'
+        : '异常原内容已保留，已恢复最近一次有效存档。请核对工资与月度记录。' });
+      return normalizeState(parsed);
+    } catch { /* Another retained snapshot may still be valid. */ }
+  }
+  return structuredClone(DEFAULT_STATE);
+}
+
+function writeBrowserDocument(next: AppState) {
+  if (browserRecovery.get(localStorage)?.status === 'blocked') {
+    const text = localStorage.getItem(KEY);
+    if (text) preserveBrowserText(text);
+    if (browserRecovery.get(localStorage)?.status === 'blocked') throw new Error('[PROFILE_RECOVERY_REQUIRED] 原资料尚未保护，已停止写入。');
+  }
+  const current = localStorage.getItem(KEY);
+  if (current) {
+    let valid = false;
+    try { valid = isProfileDocument(migrateLegacyProfile(JSON.parse(current))); } catch { /* Preserve below. */ }
+    if (valid) {
+      for (let index = 3; index >= 2; index--) {
+        const previous = localStorage.getItem(`${KEY}.backup.${index - 1}`);
+        if (!previous) continue;
+        try { if (isProfileDocument(migrateLegacyProfile(JSON.parse(previous)))) localStorage.setItem(`${KEY}.backup.${index}`, previous); }
+        catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+      }
+      localStorage.setItem(`${KEY}.backup.1`, current);
+    } else preserveBrowserText(current);
+  }
+  const text = JSON.stringify(next);
+  localStorage.setItem(KEY, text);
+  if (localStorage.getItem(KEY) !== text) throw new Error('NIUMA_WRITE_UNCONFIRMED');
 }
 
 // Read and write under one origin-wide lock so a second tab cannot erase an entry.
@@ -113,7 +179,7 @@ function updateBrowserState(update: (latest: AppState) => AppState): Promise<App
   const store = () => {
     const latest = readBrowserState();
     const next = update(latest);
-    if (next !== latest) localStorage.setItem(KEY, JSON.stringify(next));
+    if (next !== latest) writeBrowserDocument(next);
     return next;
   };
   const locks = window.navigator?.locks;
@@ -123,6 +189,26 @@ function updateBrowserState(update: (latest: AppState) => AppState): Promise<App
 export async function writeState(state: AppState): Promise<AppState> {
   if (isDesktopHost()) return confirmSave(await desktopStore().setState(state), state);
   return updateBrowserState(latest => ({ ...state, savings: latest.savings }));
+}
+
+/** Read the authoritative profile only after obtaining the browser lock or entering synchronous native IPC. */
+export async function writeDayOverrides(patch: DayOverridePatch, expected?: DayOverridePatch): Promise<AppState> {
+  if (isDesktopHost()) {
+    const bridge = desktopStore();
+    if (!bridge.writeDayOverrides) throw new Error('NIUMA_BRIDGE_MISSING');
+    const reply = await bridge.writeDayOverrides(patch, expected);
+    if (!isProfileDocument(reply) || !reply.configured) throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    const saved = normalizeState(reply);
+    if (Object.entries(patch).some(([key, value]) => (saved.settings.dayOverrides[key] ?? null) !== value)) {
+      throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    }
+    return saved;
+  }
+  return updateBrowserState(latest => {
+    if (!latest.configured) throw new Error('[SCHEDULE_UNCONFIGURED] 请先设置月薪，再修改排班。');
+    const dayOverrides = applyDayOverridePatch(latest.settings.dayOverrides, patch, expected);
+    return { ...latest, settings: { ...latest.settings, dayOverrides } };
+  });
 }
 
 export async function writeSavingsEntry(entry: SavingsEntry, previous: SavingsEntry | null): Promise<AppState> {
@@ -138,6 +224,55 @@ export async function writeSavingsEntry(entry: SavingsEntry, previous: SavingsEn
   return updateBrowserState(latest => {
     const savings = recordSavingsEntry(latest, entry, previous);
     return savings === latest.savings ? latest : { ...latest, savings };
+  });
+}
+
+export async function deleteSavingsEntry(previous: SavingsEntry): Promise<AppState> {
+  if (isDesktopHost()) {
+    const bridge = desktopStore();
+    if (!bridge.deleteSavingsEntry) throw new Error('NIUMA_BRIDGE_MISSING');
+    const reply = await bridge.deleteSavingsEntry(previous);
+    const saved = normalizeState(reply);
+    if (!reply || !saved.configured || Object.hasOwn(saved.savings, previous.month)) throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    return saved;
+  }
+  return updateBrowserState(latest => {
+    const savings = removeSavingsEntry(latest, previous);
+    return savings === latest.savings ? latest : { ...latest, savings };
+  });
+}
+
+export async function getProfileRecovery(): Promise<ProfileRecovery> {
+  if (isDesktopHost()) {
+    const bridge = desktopStore();
+    if (!bridge.getProfileRecovery) throw new Error('NIUMA_BRIDGE_MISSING');
+    return bridge.getProfileRecovery();
+  }
+  readBrowserState();
+  return browserRecovery.get(localStorage) ?? { ...normalRecovery };
+}
+
+export async function exportProfileBackup(): Promise<ProfileBackup> {
+  if (isDesktopHost()) {
+    const bridge = desktopStore();
+    if (!bridge.exportProfileBackup) throw new Error('NIUMA_BRIDGE_MISSING');
+    return parseProfileBackup(await bridge.exportProfileBackup());
+  }
+  return createProfileBackup(readBrowserState());
+}
+
+export async function importProfileBackup(document: ProfileBackup, expectedRevision: string): Promise<AppState> {
+  const backup = parseProfileBackup(document);
+  if (isDesktopHost()) {
+    const bridge = desktopStore();
+    if (!bridge.importProfileBackup) throw new Error('NIUMA_BRIDGE_MISSING');
+    const reply = await bridge.importProfileBackup(backup, expectedRevision);
+    if (!reply || !isProfileDocument(reply) || profileRevision(reply) !== profileRevision(backup.profile)) throw new Error('NIUMA_WRITE_UNCONFIRMED');
+    return normalizeState(reply);
+  }
+  return updateBrowserState(latest => {
+    if (profileRevision(latest) !== expectedRevision) throw new Error('[BACKUP_CONFLICT] 本机资料在预览期间发生变化，请重新选择文件并核对后导入。');
+    return normalizeState(backup.profile);
   });
 }
 

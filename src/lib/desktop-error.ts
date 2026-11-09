@@ -11,7 +11,13 @@ export function describeDesktopError(error: unknown, operation: string = 'window
     ? String(error.message) : typeof error === 'string' ? error : '';
   const message = raw.replace(/^Error invoking remote method '[^']+':\s*/i, '').replace(/^(?:Error:\s*)+/i, '').trim();
   let detail: string;
-  if (/NIUMA_BRIDGE_MISSING|No handler registered|is not a function|Cannot read properties of undefined/i.test(message)) {
+  if (/\[BACKUP_CONFLICT\]/.test(message)) {
+    detail = '预览期间本机资料已更新。请重新选择备份并核对，避免覆盖刚保存的记录。';
+  } else if (/\[PROFILE_RECOVERY_REQUIRED\]/.test(message)) {
+    detail = '原资料异常且尚未成功保留，已停止覆盖写入。请检查本机存储空间及读写权限，再重新打开应用。';
+  } else if (/\[BACKUP_INVALID\]/.test(message)) {
+    detail = message.replace(/^\[BACKUP_INVALID\]\s*/, '');
+  } else if (/NIUMA_BRIDGE_MISSING|No handler registered|is not a function|Cannot read properties of undefined/i.test(message)) {
     detail = '桌面组件未正确连接。请从系统托盘退出后，重新打开同一版本的完整应用。';
   } else if (/not authorized|unauthori[sz]ed|NIUMA_UNTRUSTED|\[WINDOW_NOT_TRUSTED\]/i.test(message)) {
     detail = '桌面端未识别当前窗口。请从系统托盘退出，再重新打开应用。';

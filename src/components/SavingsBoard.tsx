@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowUpRight, ChevronDown, NotebookPen, Pencil, PiggyBank, Plus, X } from 'lucide-react';
-import { MAX_SAVINGS_CENTS, netSavings, type SavingsEntry } from '../../shared/savings.mjs';
+import { memo, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { ArrowUpRight, ChevronDown, Download, NotebookPen, Pencil, PiggyBank, Plus, Trash2, Undo2, X } from 'lucide-react';
+import { MAX_SAVINGS_CENTS, netSavings, savingsLedgerCSV, type SavingsEntry } from '../../shared/savings.mjs';
 import { currencySymbol, money } from '../lib/clock';
 import { describeDesktopError } from '../lib/desktop-error';
 import type { AppState } from '../lib/store';
@@ -13,6 +13,7 @@ type BoardProps = {
   currentMonth: string;
   onConfigure: () => void;
   onSave: (entry: SavingsEntry, previous: SavingsEntry | null) => Promise<void>;
+  onDelete?: (previous: SavingsEntry) => Promise<void>;
 };
 const currencyNames: Record<Currency, string> = { CNY: '人民币', HKD: '港币', USD: '美元' };
 const hiddenAmount = '••••';
@@ -162,10 +163,83 @@ function EntryDialog({ state, currentMonth, initialMonth, chooseMonth, onSave, o
   </dialog>;
 }
 
-function SavingsBoard({ state, currentMonth, onConfigure, onSave }: BoardProps) {
+function WithdrawalDialog({ entry, onDelete, onClose }: {
+  entry: SavingsEntry; onDelete: (entry: SavingsEntry) => Promise<void>; onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const submitting = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const element = dialog.current;
+    element?.showModal();
+    return () => { element?.close(); if (previousFocus?.isConnected) previousFocus.focus(); };
+  }, []);
+  async function withdraw(event: FormEvent) {
+    event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setError('');
+    try { await onDelete(entry); onClose(); }
+    catch (reason) { setError(describeDesktopError(reason, '撤回存钱记录')); }
+    finally { submitting.current = false; setBusy(false); }
+  }
+  return <dialog ref={dialog} className="savings-dialog savings-withdraw-dialog" aria-labelledby="savings-withdraw-title"
+    aria-describedby="savings-withdraw-description" onCancel={event => { event.preventDefault(); if (!submitting.current) onClose(); }}>
+    <form onSubmit={withdraw}>
+      <header><div className="savings-dialog-title"><Trash2 size={21} aria-hidden="true" /><h2 id="savings-withdraw-title">撤回这笔记录？</h2></div>
+        <button type="button" className="icon-button" disabled={busy} onClick={onClose} aria-label="关闭撤回确认"><X size={19} /></button></header>
+      <p id="savings-withdraw-description">撤回 {monthLabel(entry.month)}的{currencyNames[entry.currency]}记录，累计已存将重新计算。</p>
+      <p className="savings-withdraw-amount">本笔存入 <strong>{amountLabel(netSavings(entry), entry.currency)}</strong></p>
+      <p className="savings-withdraw-hint">确认后可在 15 秒内撤销，也可以稍后重新补记。</p>
+      {error && <p role="alert" className="savings-error">{error}</p>}
+      <footer><button type="button" className="button secondary" autoFocus disabled={busy} onClick={onClose}>保留记录</button>
+        <button type="submit" className="button primary" disabled={busy}>{busy ? '正在撤回…' : '确认撤回'}</button></footer>
+    </form>
+  </dialog>;
+}
+
+function SavingsTrend({ entries, currency, privacy }: { entries: SavingsEntry[]; currency: Currency; privacy: boolean }) {
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const recent = entries.slice(0, 12).reverse();
+  const selected = recent.find(entry => entry.month === selectedMonth) ?? recent.at(-1);
+  const magnitude = Math.max(1, ...recent.map(entry => Math.abs(netSavings(entry))));
+  return <figure className="savings-trend" aria-labelledby="savings-trend-title">
+    <figcaption><h3 id="savings-trend-title">月度存款趋势</h3><span>{currency} · 仅显示已入账月份</span></figcaption>
+    {privacy ? <p className="savings-trend-empty">金额已隐藏，显示金额后可查看趋势。</p> : !recent.length
+      ? <p className="savings-trend-empty">记入第一笔存款后，在这里看每月的变化。</p>
+      : <>
+        <div className="savings-trend-scroll">
+          <ol className="savings-trend-bars" style={{ '--trend-months': recent.length } as CSSProperties}>
+            {recent.map(entry => {
+              const net = netSavings(entry);
+              return <li key={entry.month}><button type="button" aria-pressed={selected?.month === entry.month}
+                aria-label={`${monthLabel(entry.month)}存入 ${amountLabel(net, currency)}，查看记录`}
+                onClick={() => setSelectedMonth(entry.month)}>
+                <span className="savings-trend-track" aria-hidden="true"><i className={net < 0 ? 'negative' : 'positive'}
+                  style={{ height: `${Math.max(net === 0 ? 0 : 2, Math.abs(net) / magnitude * 45)}%` }} /></span>
+                <span className="savings-trend-month">{Number(entry.month.slice(5))}月</span>
+              </button></li>;
+            })}
+          </ol>
+        </div>
+        <p className="savings-trend-caption" role="status">{selected && <>{monthLabel(selected.month)} · {netSavings(selected) < 0 ? '超支' : '存入'} <strong>{amountLabel(Math.abs(netSavings(selected)), currency)}</strong></>}</p>
+      </>}
+  </figure>;
+}
+
+function SavingsBoard({ state, currentMonth, onConfigure, onSave, onDelete }: BoardProps) {
   const [selectedCurrency, setSelectedCurrency] = useState<Currency | null>(null);
   const [editor, setEditor] = useState<{ month: string; chooseMonth: boolean } | null>(null);
   const [details, setDetails] = useState(false);
+  const [withdrawal, setWithdrawal] = useState<SavingsEntry | null>(null);
+  const [undo, setUndo] = useState<{ entry: SavingsEntry; expires: number } | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
+  const undoSubmitting = useRef(false);
+  const undoButton = useRef<HTMLButtonElement>(null);
+  const [actionError, setActionError] = useState('');
   const sorted = Object.values(state.savings).filter(entry => entry.month <= currentMonth)
     .sort((a, b) => b.month.localeCompare(a.month));
   const current = state.savings[currentMonth];
@@ -181,7 +255,12 @@ function SavingsBoard({ state, currentMonth, onConfigure, onSave }: BoardProps) 
     : cents == null ? '—' : amountLabel(cents, code);
   const monthCount = currencyMonths.length;
   const canEdit = state.configured && !state.privacy;
-  useEffect(() => { if (!canEdit) setEditor(null); }, [canEdit]);
+  useEffect(() => { if (!canEdit) { setEditor(null); setWithdrawal(null); } }, [canEdit]);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = setTimeout(() => setUndo(previous => previous === undo ? null : previous), Math.max(0, undo.expires - Date.now()));
+    return () => clearTimeout(timer);
+  }, [undo]);
   function openHistoryEditor() {
     const [year, month] = currentMonth.split('-').map(Number);
     const lastMonth = month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, '0')}`;
@@ -190,6 +269,35 @@ function SavingsBoard({ state, currentMonth, onConfigure, onSave }: BoardProps) 
   async function save(entry: SavingsEntry, previous: SavingsEntry | null) {
     await onSave(entry, previous);
     setSelectedCurrency(entry.currency);
+  }
+  async function withdraw(entry: SavingsEntry) {
+    if (!onDelete) return;
+    await onDelete(entry);
+    setActionError('');
+    setUndo({ entry, expires: Date.now() + 15_000 });
+    requestAnimationFrame(() => undoButton.current?.focus());
+  }
+  async function restoreWithdrawal() {
+    if (!undo || !canEdit || undoSubmitting.current || Date.now() >= undo.expires) return;
+    const entry = undo.entry;
+    undoSubmitting.current = true;
+    setUndoBusy(true);
+    setActionError('');
+    try { await save(entry, null); setUndo(null); }
+    catch (reason) { setActionError(describeDesktopError(reason, '撤销撤回')); }
+    finally { undoSubmitting.current = false; setUndoBusy(false); }
+  }
+  function exportCSV() {
+    if (state.privacy || !sorted.length) return;
+    const blob = new Blob([savingsLedgerCSV(state.savings, currentMonth)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `niuma-savings-${currentMonth}.csv`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   return <section id="savings-board" className="savings-board" aria-labelledby="savings-title">
@@ -221,11 +329,17 @@ function SavingsBoard({ state, currentMonth, onConfigure, onSave }: BoardProps) 
         </div>
       </div>
     </div>
+    <SavingsTrend entries={currencyMonths} currency={currency} privacy={state.privacy} />
+    {undo && canEdit && <div className="savings-undo" role="status"><span>已撤回 {monthLabel(undo.entry.month)}的记录</span>
+      <button ref={undoButton} type="button" onClick={() => void restoreWithdrawal()} disabled={undoBusy}><Undo2 size={14} aria-hidden="true" />{undoBusy ? '恢复中…' : '撤销撤回'}</button></div>}
+    {actionError && <p className="savings-error savings-action-error" role="alert">{actionError}</p>}
     <div className="savings-history">
       <button type="button" className="savings-disclosure" aria-expanded={details} aria-controls="savings-history-content" onClick={() => setDetails(!details)}>
         <ChevronDown size={16} aria-hidden="true" />月度明细</button>
       {details && <div id="savings-history-content">
-        {canEdit && <button className="savings-backfill" onClick={openHistoryEditor}><Plus size={14} aria-hidden="true" />补记月份</button>}
+        <div className="savings-history-actions">{canEdit && <button className="savings-backfill" onClick={openHistoryEditor}><Plus size={14} aria-hidden="true" />补记月份</button>}
+          <button type="button" className="savings-export" onClick={exportCSV} disabled={state.privacy || !sorted.length}
+            title={state.privacy ? '显示金额后可导出' : '导出全部已入账月份，包含币种'}><Download size={14} aria-hidden="true" />导出 CSV</button></div>
         {sorted.length ? <table className="savings-table"><thead><tr>
           <th>月份</th><th>月薪</th><th>房租</th><th>生活费</th><th>存入金额</th>{canEdit && <th><span className="sr-only">操作</span></th>}
         </tr></thead><tbody>{sorted.map(entry => <tr key={entry.month}>
@@ -235,12 +349,15 @@ function SavingsBoard({ state, currentMonth, onConfigure, onSave }: BoardProps) 
           <td data-label="生活费">{label(entry.livingCents, entry.currency)}</td>
           <td data-label="存入金额" className="savings-row-net">{label(netSavings(entry), entry.currency)}</td>
           {canEdit && <td className="savings-row-action"><button className="icon-button" onClick={() => setEditor({ month: entry.month, chooseMonth: false })}
-            aria-label={`更正 ${monthLabel(entry.month)}的记录`}><Pencil size={15} /></button></td>}
+            aria-label={`更正 ${monthLabel(entry.month)}的记录`}><Pencil size={15} /></button>
+            {onDelete && <button type="button" className="icon-button savings-withdraw-button" onClick={() => setWithdrawal(entry)}
+              aria-label={`撤回 ${monthLabel(entry.month)}的记录`}><Trash2 size={15} /></button>}</td>}
         </tr>)}</tbody></table> : <p className="savings-history-empty">暂无月度记录。</p>}
       </div>}
     </div>
     {canEdit && editor && <EntryDialog state={state} currentMonth={currentMonth} initialMonth={editor.month} chooseMonth={editor.chooseMonth}
       onSave={save} onClose={() => setEditor(null)} />}
+    {canEdit && withdrawal && onDelete && <WithdrawalDialog entry={withdrawal} onDelete={withdraw} onClose={() => setWithdrawal(null)} />}
   </section>;
 }
 

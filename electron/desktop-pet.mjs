@@ -108,7 +108,7 @@ export class DesktopPet {
   end(landing) {
     const trip = this.trip;
     this.trip = null;
-    clearInterval(this.companionTimer);
+    clearTimeout(this.companionTimer);
     this.companionTimer = undefined;
     trip?.cancelLaunch?.();
     const widget = landing && this.getWidget();
@@ -142,7 +142,26 @@ export class DesktopPet {
     trip.lastTime = performance.now();
     this.publish({ phase: 'companion' });
     this.tick(screen.getCursorScreenPoint());
-    this.companionTimer ??= setInterval(() => this.tick(screen.getCursorScreenPoint()), 24);
+    this.scheduleCompanionTick();
+  }
+
+  companionTickDelay() {
+    const trip = this.trip;
+    // Only Windows' preinstalled native input region can accept an immediate
+    // press without sampling the cursor first. Keep Mac's input polling fast.
+    if (!trip?.reduced || trip.press || trip.restoreTarget?.until > performance.now()) return 24;
+    const visible = [...this.surfaces.values()].filter(surface => surface.shown && !surface.win.isDestroyed());
+    return visible.length && visible.every(surface => surface.nativeCompanionShape) ? 120 : 24;
+  }
+
+  scheduleCompanionTick(reset = false) {
+    if (reset) { clearTimeout(this.companionTimer); this.companionTimer = undefined; }
+    if (this.companionTimer || this.state.phase !== 'companion' || !this.trip?.ready || this.trip.suspended) return;
+    this.companionTimer = setTimeout(() => {
+      this.companionTimer = undefined;
+      this.tick(screen.getCursorScreenPoint());
+      this.scheduleCompanionTick();
+    }, this.companionTickDelay());
   }
 
   holdsCompanion(event, surface) {
@@ -203,6 +222,7 @@ export class DesktopPet {
       } else return;
     }
     this.tick(screen.getCursorScreenPoint());
+    if (this.companionTimer) this.scheduleCompanionTick(true);
   }
 
   overWidgetCard(cursor) {
@@ -283,7 +303,7 @@ export class DesktopPet {
 
   suspend() {
     if (this.state.phase !== 'companion') { this.end(); return; }
-    clearInterval(this.companionTimer);
+    clearTimeout(this.companionTimer);
     this.companionTimer = undefined;
     this.trip.suspended = true;
     this.trip.press = null;
@@ -296,7 +316,7 @@ export class DesktopPet {
     this.trip.suspended = false;
     this.trip.lastTime = performance.now();
     this.tick(screen.getCursorScreenPoint());
-    this.companionTimer ??= setInterval(() => this.tick(screen.getCursorScreenPoint()), 24);
+    this.scheduleCompanionTick();
   }
 
   home(widget, trip) {
@@ -319,7 +339,7 @@ export class DesktopPet {
       if (typeof reducedMotion === 'boolean') trip.reduced = reducedMotion;
       // Hidden widget renderers can still report a preference change. That
       // must not recall a companion into a card that remains minimized.
-      if (this.state.phase === 'companion') return this.state;
+      if (this.state.phase === 'companion') { this.scheduleCompanionTick(true); return this.state; }
       if (trip.idleCursor) trip.lastTime = performance.now();
       trip.idleCursor = null;
       if (!trip.ready) {
@@ -461,7 +481,7 @@ export class DesktopPet {
       const frame = contents.mainFrame;
       if (typeof reduced !== 'boolean' || event.processId !== frame.processId || event.frameId !== frame.routingId) return;
       surface.reduced = reduced;
-      if (this.trip) this.trip.reduced = reduced;
+      if (this.trip) { this.trip.reduced = reduced; this.scheduleCompanionTick(true); }
     });
     contents.on('render-process-gone', (_event, details) => failed(new Error(details.reason)));
     surface.win.on('closed', () => failed(new Error('桌面绘制窗口已关闭')));

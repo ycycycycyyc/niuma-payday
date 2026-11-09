@@ -246,3 +246,51 @@ test('dragging across displays keeps the source capture alive and drops in the d
   assert.equal(source.acceptsMouse, false);
   assert.ok(destination.shown && !destination.acceptsMouse, 'the pointer has already moved away from the drop');
 });
+
+test('only a stationary reduced-motion companion with native input regions reduces its polling rate', () => {
+  const { pet, surface } = companion();
+  pet.trip.reduced = true;
+  assert.equal(pet.companionTickDelay(), 24, 'Mac-style mouse hit testing keeps its original cadence');
+  Object.assign(surface, { nativeCompanionShape: true });
+  assert.equal(pet.companionTickDelay(), 120, 'a Windows stationary dog accepts first presses through its native region');
+  pet.trip.reduced = false;
+  assert.equal(pet.companionTickDelay(), 24, 'walking and its animation keep their existing cadence');
+  pet.trip.reduced = true;
+  pet.trip.press = { surface, dragging: false };
+  assert.equal(pet.companionTickDelay(), 24, 'a held press stays responsive before the drag threshold');
+  pet.trip.press.dragging = true;
+  assert.equal(pet.companionTickDelay(), 24, 'dragging follows the pointer at full cadence');
+  pet.trip.press = null;
+  pet.trip.restoreTarget = { until: performance.now() + 650 };
+  assert.equal(pet.companionTickDelay(), 24, 'the second-click window stays responsive');
+  pet.trip.restoreTarget.until = 0;
+  assert.equal(pet.companionTickDelay(), 120);
+  surface.shown = false;
+  assert.equal(pet.companionTickDelay(), 24, 'an unprepared surface is not treated as native-input ready');
+});
+
+test('the companion scheduler stops on suspend and does not recreate timers while inactive', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { pet, surface } = companion();
+  Object.assign(surface.win, { hide() {} });
+  Object.assign(surface.win.webContents, { send() {} });
+  pet.trip.reduced = true;
+  Object.assign(surface, { nativeCompanionShape: true });
+  let frames = 0;
+  pet.tick = () => { frames++; };
+  pet.scheduleCompanionTick();
+  t.mock.timers.tick(119);
+  assert.equal(frames, 0);
+  t.mock.timers.tick(1);
+  assert.equal(frames, 1);
+  pet.suspend();
+  t.mock.timers.tick(1000);
+  assert.equal(frames, 1);
+  assert.equal(pet.companionTimer, undefined);
+  pet.scheduleCompanionTick();
+  assert.equal(pet.companionTimer, undefined, 'lock or sleep cannot restart background polling');
+  pet.state = { phase: 'docked' };
+  pet.trip.suspended = false;
+  pet.scheduleCompanionTick();
+  assert.equal(pet.companionTimer, undefined);
+});

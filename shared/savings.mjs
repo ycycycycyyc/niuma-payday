@@ -55,3 +55,40 @@ export function recordSavingsEntry(state, entry, previous, now = new Date()) {
   }
   return { ...ledger, [entry.month]: snapshot(entry) };
 }
+
+export function removeSavingsEntry(state, previous) {
+  if (!state?.configured) throw new Error('[SAVINGS_UNCONFIGURED] 请先设置真实月薪，再修改存款记录。');
+  if (!isSavingsEntry(previous)) throw new Error('[SAVINGS_INVALID] 原记录的月份、币种或金额无效。');
+  const ledger = state.savings ?? {};
+  const current = ledger[previous.month] ?? null;
+  // Retrying an acknowledged deletion is safe. A newly changed record must survive.
+  if (current === null) return ledger;
+  if (!sameSavingsEntry(current, previous)) {
+    throw new Error('[SAVINGS_CONFLICT] 这个月的记录已更新，请重新查看后再撤回。');
+  }
+  const next = { ...ledger };
+  delete next[previous.month];
+  return next;
+}
+
+function decimalCents(cents) {
+  const absolute = Math.abs(cents);
+  return `${cents < 0 ? '-' : ''}${Math.floor(absolute / 100)}.${String(absolute % 100).padStart(2, '0')}`;
+}
+
+function csvCell(value) {
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+/** UTF-8 BOM and CRLF keep Chinese column names readable in desktop Excel. */
+export function savingsLedgerCSV(ledger, currentMonth = localMonthKey(), currency) {
+  const entries = Object.values(normalizeSavingsLedger(ledger))
+    .filter(entry => entry.month <= currentMonth && (!currency || entry.currency === currency))
+    .sort((left, right) => left.month.localeCompare(right.month));
+  const rows = [['月份', '币种', '月薪', '房租', '生活费', '存入金额'], ...entries.map(entry => [
+    entry.month, entry.currency, decimalCents(entry.salaryCents), decimalCents(entry.rentCents),
+    decimalCents(entry.livingCents), decimalCents(netSavings(entry)),
+  ])];
+  return '\uFEFF' + rows.map(row => row.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}

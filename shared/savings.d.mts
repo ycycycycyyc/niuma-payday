@@ -17,3 +17,8 @@ export function recordSavingsEntry(
   state: { configured: boolean; savings?: SavingsLedger } | null,
   entry: SavingsEntry, previous: SavingsEntry | null, now?: Date,
 ): SavingsLedger;
+export function removeSavingsEntry(
+  state: { configured: boolean; savings?: SavingsLedger } | null,
+  previous: SavingsEntry,
+): SavingsLedger;
+export function savingsLedgerCSV(ledger: SavingsLedger, currentMonth?: string, currency?: SavingsEntry['currency']): string;

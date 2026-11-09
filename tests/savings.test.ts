@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   MAX_SAVINGS_CENTS, localMonthKey, netSavings, normalizeSavingsLedger, recordSavingsEntry,
+  removeSavingsEntry, savingsLedgerCSV,
   type SavingsEntry, type SavingsLedger,
 } from '../shared/savings.mjs';
 
@@ -42,4 +43,35 @@ test('invalid entries and future dates cannot write, damaged stored rows do not 
   const stored: SavingsLedger = { [entry.month]: entry, '2026-10': entry, '2026-11': { ...entry, month: '2026-11', salaryCents: -1 } };
   assert.deepEqual(normalizeSavingsLedger(stored), { [entry.month]: entry });
   assert.deepEqual(normalizeSavingsLedger(undefined), {});
+});
+
+test('withdrawal is idempotent, immutable, and rejects a changed monthly snapshot', () => {
+  const prior = { ...entry, month: '2026-11' };
+  const ledger = { [entry.month]: entry, [prior.month]: prior };
+  const deleted = removeSavingsEntry({ configured: true, savings: ledger }, entry);
+  assert.deepEqual(deleted, { [prior.month]: prior });
+  assert.equal(ledger[entry.month], entry);
+  assert.equal(removeSavingsEntry({ configured: true, savings: deleted }, entry), deleted);
+  assert.throws(() => removeSavingsEntry({ configured: true, savings: ledger }, { ...entry, livingCents: 0 }), /SAVINGS_CONFLICT/);
+  assert.throws(() => removeSavingsEntry(null, entry), /SAVINGS_UNCONFIGURED/);
+  assert.throws(() => removeSavingsEntry({ configured: true, savings: ledger }, { ...entry, month: 'invalid' }), /SAVINGS_INVALID/);
+});
+
+test('undo restores only an empty month and cannot overwrite a newer entry', () => {
+  const original = { [entry.month]: entry };
+  const removed = removeSavingsEntry({ configured: true, savings: original }, entry);
+  assert.deepEqual(recordSavingsEntry({ configured: true, savings: removed }, entry, null, monthEnd), original);
+  const replacement = { ...entry, salaryCents: 99_999 };
+  const newer = recordSavingsEntry({ configured: true, savings: removed }, replacement, null, monthEnd);
+  assert.throws(() => recordSavingsEntry({ configured: true, savings: newer }, entry, null, monthEnd), /SAVINGS_CONFLICT/);
+});
+
+test('CSV contains a BOM, explicit currencies, exact signed cents and only recorded eligible months', () => {
+  const overdrawn = { ...entry, month: '2026-10', currency: 'HKD' as const, salaryCents: 100, rentCents: 101, livingCents: 0 };
+  const future = { ...entry, month: '2027-01' };
+  const ledger = { [entry.month]: entry, [overdrawn.month]: overdrawn, [future.month]: future };
+  const csv = savingsLedgerCSV(ledger, '2026-12');
+  assert.equal(csv, '\uFEFF月份,币种,月薪,房租,生活费,存入金额\r\n2026-10,HKD,1.00,1.01,0.00,-0.01\r\n2026-12,CNY,10000.00,4000.00,2000.01,3999.99\r\n');
+  assert.equal(savingsLedgerCSV(ledger, '2026-12', 'CNY').includes('HKD'), false);
+  assert.equal(savingsLedgerCSV({}, '2026-12'), '\uFEFF月份,币种,月薪,房租,生活费,存入金额\r\n');
 });

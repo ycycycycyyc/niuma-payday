@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, screen, T
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fetchCalendarYear, isValidDateKey, normalizeCalendarCache } from '../shared/calendar.mjs';
+import { fetchCalendarYear, normalizeCalendarCache } from '../shared/calendar.mjs';
 import { createWidgetSession, decideWidget, dismissWidget, getActiveShift, markManualWidget } from '../shared/scheduler.mjs';
 import { createEntryPolicy, isTrustedIpc } from '../shared/ipc-origin.mjs';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
@@ -11,8 +11,10 @@ import { normalizeWidgetAppearance, validateWidgetAppearance } from '../shared/w
 import { setWindowsWidgetLayer } from './windows-widget-layer.mjs';
 import { DesktopPet } from './desktop-pet.mjs';
 import { normalizePetLaunchPose } from '../shared/desktop-pet-motion.mjs';
-import { migrateLegacyProfile } from '../shared/profile-migration.mjs';
-import { normalizeSavingsLedger, recordSavingsEntry } from '../shared/savings.mjs';
+import { normalizeSavingsLedger, recordSavingsEntry, removeSavingsEntry } from '../shared/savings.mjs';
+import { createProfileBackup, createProfileFileStore, isProfileDocument, parseProfileBackup, profileRevision } from '../shared/profile-backup.mjs';
+import { monitorRendererRecovery } from './renderer-recovery.mjs';
+import { applyDayOverridePatch } from '../shared/day-overrides.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const developmentURL = process.env.VITE_DEV_SERVER_URL;
@@ -39,6 +41,7 @@ let appState = null;
 let desktopState = {};
 let positionTimer;
 let lanePointerTimer;
+let nativeSuspended = false;
 let widgetPassesClicks = false;
 let widgetPet = null;
 let lastPetPointer = null;
@@ -53,6 +56,9 @@ let calendarStatus = { status: 'idle', message: '节假日日历尚未更新', c
 const appIcon = path.join(root, 'build', 'icon.png');
 const statePath = () => path.join(app.getPath('userData'), 'state.json');
 const desktopPath = () => path.join(app.getPath('userData'), 'desktop.json');
+let profileFiles;
+const profileStorage = () => profileFiles ??= createProfileFileStore(fs, statePath());
+const rendererRecovery = new WeakMap();
 const desktopPet = new DesktopPet({
   root, developmentURL, getWidget: () => widgetWindow, getHit: () => widgetPet,
   restoreWidget: () => showWidget(),
@@ -76,6 +82,11 @@ function readJSON(filename, fallback) {
 }
 
 function writeJSON(filename, value) {
+  if (filename === statePath()) {
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    profileStorage().save(value);
+    return;
+  }
   // Rename replaces the previous complete document only after the next one is written.
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   const temporary = `${filename}.tmp`;
@@ -84,39 +95,7 @@ function writeJSON(filename, value) {
 }
 
 const isRecord = value => value && typeof value === 'object' && !Array.isArray(value);
-function validState(value) {
-  if (!isRecord(value) || value.version !== 3 || typeof value.configured !== 'boolean') return false;
-  if (value.privacy !== undefined && typeof value.privacy !== 'boolean') return false;
-  if (value.goal !== undefined && (!isRecord(value.goal) || typeof value.goal.name !== 'string'
-    || !value.goal.name.trim() || value.goal.name.length > 32 || !Number.isFinite(value.goal.amount)
-    || value.goal.amount <= 0 || value.goal.amount > 100_000_000)) return false;
-  // A calendar-only first-run state is valid; it cannot schedule a popup.
-  if (value.settings === undefined) return value.configured === false;
-  const settings = value.settings;
-  const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
-  if (!isRecord(settings) || !Number.isFinite(settings.monthlySalary) || settings.monthlySalary < 0
-    || (value.configured && settings.monthlySalary === 0)
-    || settings.monthlySalary > 1_000_000_000 || !['CNY', 'HKD', 'USD'].includes(settings.currency)
-    || !['CN', 'HK'].includes(settings.region) || typeof settings.autoWidget !== 'boolean'
-    || !['last-workday', 'fixed-day'].includes(settings.paydayMode)
-    || typeof settings.lunchEnabled !== 'boolean' || !Number.isInteger(settings.payday)
-    || settings.payday < 1 || settings.payday > 31 || !isRecord(settings.dayOverrides)
-    || Object.entries(settings.dayOverrides).some(([key, mode]) => !isValidDateKey(key) || !['work', 'rest'].includes(mode))
-    || ['startTime', 'endTime', 'lunchStart', 'lunchEnd'].some(key => typeof settings[key] !== 'string' || !time.test(settings[key]))
-    || settings.startTime === settings.endTime) return false;
-  if (settings.lunchEnabled) {
-    const minutes = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
-    const start = minutes(settings.startTime);
-    let end = minutes(settings.endTime);
-    if (end <= start) end += 1440;
-    let lunchStart = minutes(settings.lunchStart);
-    if (lunchStart < start) lunchStart += 1440;
-    let lunchEnd = minutes(settings.lunchEnd);
-    while (lunchEnd <= lunchStart) lunchEnd += 1440;
-    if (lunchEnd > end || lunchEnd - lunchStart >= end - start) return false;
-  }
-  return true;
-}
+const validState = isProfileDocument;
 
 const isAllowedURL = createEntryPolicy(path.join(root, 'dist', 'index.html'), { developmentURL });
 const ownedContents = new Map();
@@ -142,9 +121,18 @@ function secureWindow(window, role) {
 
 function loadWindow(window, widget = false) {
   secureWindow(window, widget ? 'widget' : 'main');
+  rendererRecovery.set(window, monitorRendererRecovery(window, {
+    isQuitting: () => quitting,
+    beforeRetry: () => { if (widget) pauseWidgetPointerTracking(); },
+    failed: () => {
+      if (widget) { desktopPet.end(); widgetWindow?.hide(); }
+      refreshTrayMenu();
+    },
+  }));
   window.webContents.on('did-finish-load', () => {
     window.webContents.send('niuma:widget-layer-changed', getWidgetLayer());
     window.webContents.send('niuma:widget-appearance-changed', getWidgetAppearance());
+    if (widget && widgetShown && window.isVisible()) startWidgetPointerTracking();
   });
   if (developmentURL) {
     return window.loadURL(`${developmentURL.replace(/\/$/, '')}/${widget ? '#/widget' : ''}`);
@@ -158,7 +146,7 @@ const webPreferences = {
   nodeIntegration: false,
   sandbox: true,
   webSecurity: true,
-  backgroundThrottling: false,
+  backgroundThrottling: true,
 };
 
 function createMainWindow() {
@@ -232,6 +220,25 @@ function stopWidgetPointerTracking(keepCompanion = false) {
   widgetPassesClicks = false;
 }
 
+function pauseWidgetPointerTracking() {
+  clearInterval(lanePointerTimer);
+  lanePointerTimer = undefined;
+  lastPetPointer = null;
+}
+
+function suspendNativeActivity() {
+  nativeSuspended = true;
+  pauseWidgetPointerTracking();
+  desktopPet.suspend();
+}
+
+function resumeNativeActivity() {
+  nativeSuspended = false;
+  desktopPet.resume();
+  if (widgetShown && widgetWindow && !widgetWindow.isDestroyed() && widgetWindow.isVisible()) startWidgetPointerTracking();
+  backgroundTick();
+}
+
 function hitsWidgetPet(x, y) {
   if (!widgetPet?.width || !widgetPet.height) return false;
   const menu = widgetPet.menu;
@@ -247,6 +254,7 @@ function hitsWidgetPet(x, y) {
 }
 
 function syncWidgetMouseRegion() {
+  if (nativeSuspended || !widgetWindow || widgetWindow.isDestroyed() || !widgetWindow.isVisible()) return;
   if (process.platform !== 'win32' && process.platform !== 'darwin') return;
   const cursor = screen.getCursorScreenPoint();
   desktopPet.tick(cursor);
@@ -269,6 +277,7 @@ function syncWidgetMouseRegion() {
 }
 
 function startWidgetPointerTracking() {
+  if (nativeSuspended) return;
   if (process.platform !== 'win32' && process.platform !== 'darwin') return;
   syncWidgetMouseRegion();
   if (!lanePointerTimer) desktopPet.prewarm();
@@ -445,6 +454,7 @@ async function showWidget(minimizeMain = true, mode = 'manual') {
   const request = ++widgetRequest;
   if (mode === 'manual') widgetSession = markManualWidget(appState, new Date(), widgetSession);
   try {
+    if (widgetWindow && rendererRecovery.get(widgetWindow)?.failed) widgetWindow.destroy();
     if (!widgetWindow || widgetWindow.isDestroyed()) {
       creatingWidget ??= createWidget().finally(() => { creatingWidget = undefined; });
       await creatingWidget;
@@ -476,6 +486,7 @@ async function showWidget(minimizeMain = true, mode = 'manual') {
 }
 
 function restoreMain() {
+  if (mainWindow && rendererRecovery.get(mainWindow)?.failed) mainWindow.destroy();
   if (!mainWindow || mainWindow.isDestroyed()) createMainWindow();
   hideWidget(false);
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -605,8 +616,8 @@ function refreshTrayMenu() {
     label: '收起骨头', click: () => { void desktopPet.setMode(false); },
   }] : [];
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '打开牛马鼓励器', click: restoreMain },
-    { label: '显示工资浮窗', click: () => { void showWidget().catch(() => {}); } },
+    { label: rendererRecovery.get(mainWindow)?.failed ? '恢复主窗口（页面异常）' : '打开牛马鼓励器', click: restoreMain },
+    { label: rendererRecovery.get(widgetWindow)?.failed ? '恢复工资浮窗（页面异常）' : '显示工资浮窗', click: () => { void showWidget().catch(() => {}); } },
     { label: '将浮窗置顶', click: bringWidgetToTop },
     ...recall,
     { label: '隐藏工资浮窗', click: () => hideWidget() },
@@ -637,6 +648,7 @@ function createTray() {
 
 function saveProfile(next) {
   try { writeJSON(statePath(), next); } catch (error) {
+    if (/PROFILE_RECOVERY_REQUIRED|NIUMA_WRITE_UNCONFIRMED/.test(error.message)) throw error;
     if (['EPERM', 'EACCES', 'EBUSY', 'EROFS'].includes(error.code)) throw new Error('[SAVE_PERMISSION] 无法写入本机应用数据目录，请检查目录权限或关闭占用文件的程序。');
     if (error.code === 'ENOSPC') throw new Error('[SAVE_SPACE] 磁盘空间不足，请腾出空间后再试。');
     throw new Error('[SAVE_FAILED] 无法保存设置，请检查本机磁盘后重试。');
@@ -689,8 +701,32 @@ function installIPC() {
     return minimizeWidget(value.reducedMotion);
   }));
   handle('niuma:get-state', () => appState);
+  handle('niuma:write-day-overrides', (patch, expected) => {
+    if (!appState?.configured) throw new Error('[SCHEDULE_UNCONFIGURED] 请先设置月薪，再修改排班。');
+    const dayOverrides = applyDayOverridePatch(appState.settings.dayOverrides, patch, expected);
+    saveProfile({ ...appState, settings: { ...appState.settings, dayOverrides } });
+    backgroundTick();
+    return appState;
+  });
+  handle('niuma:get-profile-recovery', () => profileStorage().status());
+  handle('niuma:export-profile-backup', () => createProfileBackup(appState));
+  handle('niuma:import-profile-backup', (document, expectedRevision) => {
+    if (typeof expectedRevision !== 'string' || expectedRevision !== profileRevision(appState)) {
+      throw new Error('[BACKUP_CONFLICT] 本机资料在预览期间发生变化，请重新选择文件并核对后导入。');
+    }
+    if (Buffer.byteLength(JSON.stringify(document), 'utf8') > 5 * 1024 * 1024) throw new Error('[BACKUP_INVALID] 备份文件超过 5 MB。');
+    const backup = parseProfileBackup(document);
+    saveProfile(backup.profile);
+    backgroundTick();
+    return appState;
+  });
   handle('niuma:write-savings-entry', (entry, previous) => {
     const savings = recordSavingsEntry(appState, entry, previous);
+    if (savings !== appState.savings) saveProfile({ ...appState, savings });
+    return appState;
+  });
+  handle('niuma:delete-savings-entry', previous => {
+    const savings = removeSavingsEntry(appState, previous);
     if (savings !== appState.savings) saveProfile({ ...appState, savings });
     return appState;
   });
@@ -751,7 +787,7 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(() => {
     app.setName('牛马鼓励器');
     if (process.platform === 'win32') app.setAppUserModelId('studio.niuma.payday');
-    appState = migrateLegacyProfile(readJSON(statePath(), null));
+    appState = profileStorage().load();
     if (appState) {
       const calendar = normalizeCalendarCache(appState.calendar);
       const savings = normalizeSavingsLedger(appState.savings);
@@ -771,10 +807,10 @@ if (!app.requestSingleInstanceLock()) {
     createMainWindow();
     createTray();
     scheduleTimer = setInterval(backgroundTick, 15_000);
-    powerMonitor.on('resume', () => { desktopPet.resume(); backgroundTick(); });
-    powerMonitor.on('unlock-screen', () => { desktopPet.resume(); backgroundTick(); });
-    powerMonitor.on('lock-screen', () => desktopPet.suspend());
-    powerMonitor.on('suspend', () => desktopPet.suspend());
+    powerMonitor.on('resume', resumeNativeActivity);
+    powerMonitor.on('unlock-screen', resumeNativeActivity);
+    powerMonitor.on('lock-screen', suspendNativeActivity);
+    powerMonitor.on('suspend', suspendNativeActivity);
     void refreshCalendar().catch(error => console.warn('Unable to load holiday calendar:', error.message));
     screen.on('display-removed', refitWidget);
     screen.on('display-metrics-changed', refitWidget);

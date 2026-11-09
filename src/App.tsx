@@ -1,19 +1,24 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowDownRight, ArrowRight, ArrowUpRight, BadgeCheck, Check, ChevronRight, Coffee, Coins, Eye, EyeOff, FlaskConical, Flower2, Heart, LayoutDashboard, Maximize2, Minus, Monitor, Pause, Play, Plus, Settings2, ShieldCheck, Sparkles, Sun, Target, Trophy, Wallet, X, Zap } from 'lucide-react';
-import { DEFAULT_SETTINGS, calculateSalary, earningsBetween, type SalarySettings } from './lib/salary';
+import { DEFAULT_SETTINGS, calculateSalary, earningsBetween, getScheduleContext, type DayOverridePatch, type SalarySettings } from './lib/salary';
 import { clockDate, currencySymbol, duration, money, useClock } from './lib/clock';
-import { DEFAULT_STATE, readState, subscribeState, writePrivacy, writeSavingsEntry, writeState, type AppState } from './lib/store';
+import { DEFAULT_STATE, deleteSavingsEntry, readState, subscribeState, writeDayOverrides, writePrivacy, writeSavingsEntry, writeState, type AppState } from './lib/store';
 import SettingsModal from './components/SettingsModal';
 import SavingsBoard from './components/SavingsBoard';
+import WorkCalendar from './components/WorkCalendar';
+import DataBackup from './components/DataBackup';
 import LiveAmount from './components/LiveAmount';
 import Mascot from './components/Mascot';
 import Widget, { widgetLayoutStyle } from './components/Widget';
 import CompanionPet, { type CompanionOrigin } from './components/CompanionPet';
 import { companionOrigin } from './lib/companion-origin';
-import { classifyDay, dateKey, fetchCalendarYear } from '../shared/calendar.mjs';
+import { fetchCalendarYear } from '../shared/calendar.mjs';
 import { localMonthKey, type SavingsEntry } from '../shared/savings.mjs';
 import { describeDesktopError, isDesktopHost } from './lib/desktop-error';
 import { version } from '../package.json';
+import './components/ping-pong.css';
+
+const PingPongGame = lazy(() => import('./components/PingPongGame'));
 
 type Page = 'dashboard' | 'playground' | 'achievements';
 const compactFigure = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumSignificantDigits: 3 });
@@ -49,10 +54,17 @@ function App() {
   const [loaded, setLoaded] = useState(false);
   const [profileError, setProfileError] = useState('');
   const [page, setPage] = useState<Page>('dashboard');
+  const [gameOpen, setGameOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const openSalarySettings = useCallback(() => setSettingsOpen(true), []);
   const saveSavingsEntry = useCallback(async (entry: SavingsEntry, previous: SavingsEntry | null) => {
     setState(await writeSavingsEntry(entry, previous));
+  }, []);
+  const removeSavingsEntry = useCallback(async (entry: SavingsEntry) => {
+    setState(await deleteSavingsEntry(entry));
+  }, []);
+  const saveSchedule = useCallback(async (patch: DayOverridePatch, expected?: DayOverridePatch) => {
+    setState(await writeDayOverrides(patch, expected));
   }, []);
   const [goalOpen, setGoalOpen] = useState(false);
   const [browserWidget, setBrowserWidget] = useState(false);
@@ -87,8 +99,8 @@ function App() {
   const now = useClock(demo);
   const salary = calculateSalary(settings, now, demo ? {} : state.calendar);
   const realNow = new Date();
-  const todayKey = dateKey(realNow);
-  const todaySchedule = classifyDay(realNow, settings, state.calendar);
+  const todaySchedule = getScheduleContext(settings, realNow, state.calendar);
+  const todayKey = todaySchedule.dateKey;
   const cachedYear = state.calendar[`${settings.region}-${realNow.getFullYear()}`];
   const calendarHint = demo ? state.settings.monthlySalary === 0 ? '已保留原有偏好，请补填月薪后开始计薪。' : '只需设置月薪和上下班时间，工作日自动开启。'
     : !calendarBusy ? salary.calendarNotice ?? '' : '';
@@ -159,11 +171,8 @@ function App() {
     if (dayBusy) return;
     setDayBusy(true);
     try {
-      const latest = await readState();
-      const dayOverrides = { ...latest.settings.dayOverrides };
-      if (mode === 'auto') delete dayOverrides[todayKey]; else dayOverrides[todayKey] = mode;
-      await save({ ...latest, settings: { ...latest.settings, dayOverrides } });
-      setToast(mode === 'work' ? '今天按工作日计算，沿用设置的上下班时间。' : mode === 'rest' ? '今天设为休息日，明天恢复自动判断。' : '今天已恢复日历安排。');
+      setState(await writeDayOverrides({ [todayKey]: mode === 'auto' ? null : mode }, { [todayKey]: state.settings.dayOverrides[todayKey] ?? null }));
+      setToast(`${todaySchedule.label}${mode === 'work' ? '已设为上班，沿用设置的班次时间。' : mode === 'rest' ? '已设为休息。' : '已恢复日历安排。'}`);
       if (mode === 'work') await action(openWidget, 'widget');
       if (mode === 'rest' && window.niuma) await action(() => window.niuma!.hideWidget(), 'widget');
     } catch (error) { showError(error, 'save'); }
@@ -185,7 +194,7 @@ function App() {
   ];
 
   if (!loaded) return <div className="loading-state"><Flower2 size={28} /><span>正在唤醒你的工资…</span></div>;
-  if (profileError) return <div className="connection-error" role="alert"><p>{profileError}</p><button className="button secondary" onClick={() => window.location.reload()}>重新连接</button></div>;
+  if (profileError) return <div className="connection-error"><p role="alert">{profileError}</p><button className="button secondary" onClick={() => window.location.reload()}>重新连接</button><DataBackup state={state} onRestore={value => { setState(value); setProfileError(''); }} /></div>;
   if (isWidget) return <Widget state={state} onRestore={() => void action(() => window.niuma!.restoreMain())}
     onHide={async () => {
       if (!window.niuma?.minimizeWidget) throw new Error('桌面连接需要更新，请从托盘退出后重新打开应用。');
@@ -200,12 +209,12 @@ function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <a className="brand" href="#" onClick={e => { e.preventDefault(); setPage('dashboard'); }} aria-label="牛马鼓励器首页"><span className="brand-mark"><Flower2 size={30} strokeWidth={2.2} /></span><div><strong>牛马鼓励器<span className="brand-dot">.</span></strong></div></a>
+      <a className="brand" href="#" onClick={e => { e.preventDefault(); setGameOpen(false); setPage('dashboard'); }} aria-label="牛马鼓励器首页"><span className="brand-mark"><Flower2 size={30} strokeWidth={2.2} /></span><div><strong>牛马鼓励器<span className="brand-dot">.</span></strong></div></a>
       <div className="sidebar-label">我的打工生活</div>
       <nav aria-label="主导航">
-        <button className={page === 'dashboard' ? 'nav-item selected' : 'nav-item'} onClick={() => setPage('dashboard')}><LayoutDashboard size={19} />薪动时刻<span className="nav-dot" /></button>
-        <button className={page === 'playground' ? 'nav-item selected' : 'nav-item'} onClick={() => setPage('playground')}><FlaskConical size={19} />快乐实验室</button>
-        <button className={page === 'achievements' ? 'nav-item selected' : 'nav-item'} onClick={() => setPage('achievements')}><Trophy size={19} />打工成就</button>
+        <button className={page === 'dashboard' ? 'nav-item selected' : 'nav-item'} onClick={() => { setGameOpen(false); setPage('dashboard'); }}><LayoutDashboard size={19} />薪动时刻<span className="nav-dot" /></button>
+        <button className={page === 'playground' ? 'nav-item selected' : 'nav-item'} onClick={() => { setGameOpen(false); setPage('playground'); }}><FlaskConical size={19} />快乐实验室</button>
+        <button className={page === 'achievements' ? 'nav-item selected' : 'nav-item'} onClick={() => { setGameOpen(false); setPage('achievements'); }}><Trophy size={19} />打工成就</button>
       </nav>
       <div className="sidebar-bottom"><button className="nav-item" onClick={() => setSettingsOpen(true)}><Settings2 size={19} />工资与偏好设置</button><div className="local-status"><ShieldCheck size={14} /><span>数据只留在这台设备</span><span className="version">v{version}</span></div></div>
     </aside>
@@ -219,6 +228,7 @@ function App() {
       </header>
 
       <main>
+        {gameOpen ? <Suspense fallback={<div className="loading-state">正在打开摸鱼球馆…</div>}><PingPongGame settings={settings} calendar={state.calendar} privacy={state.privacy} demo={demo} active={!settingsOpen && !goalOpen} onExit={() => { setGameOpen(false); setPage('dashboard'); }} /></Suspense> : <>
         <div className="page-heading">
           <div>
             <h1>{page === 'dashboard' ? <>今日薪动<span className="heading-star" aria-hidden="true">✿</span></> : page === 'playground' ? '快乐实验室' : '我的小勋章'}</h1>
@@ -230,17 +240,18 @@ function App() {
 
         {page === 'dashboard' && <>
           <section className="calendar-banner" aria-label="今天的工作安排">
-            <div className="calendar-status"><span className={`status-dot ${todaySchedule.working ? '' : 'resting'}`} /><div><strong>{demo ? '开始记录我的工资' : `${todaySchedule.reason} · ${settings.startTime}—${settings.endTime}`}</strong>{calendarHint && <p>{calendarHint}</p>}</div></div>
+            <div className="calendar-status"><span className={`status-dot ${todaySchedule.working ? '' : 'resting'}`} /><div><strong>{demo ? '开始记录我的工资' : `${todaySchedule.isPreviousShift ? `${todaySchedule.label} · ` : ''}${todaySchedule.reason} · ${settings.startTime}—${settings.endTime}`}</strong>{calendarHint && <p>{calendarHint}</p>}</div></div>
             <div className="day-actions">{demo ? <button className="button primary" onClick={() => setSettingsOpen(true)}>设置我的月薪<ArrowUpRight size={16} /></button> : <>
-              <button className="button secondary" disabled={dayBusy} onClick={() => void overrideToday(todaySchedule.working ? 'rest' : 'work')}>{todaySchedule.working ? '今天休息' : '今天上班'}</button>
+              <button className="button secondary" disabled={dayBusy} onClick={() => void overrideToday(todaySchedule.working ? 'rest' : 'work')}>{todaySchedule.isPreviousShift ? todaySchedule.working ? '本班休息' : '本班上班' : todaySchedule.working ? '今天休息' : '今天上班'}</button>
               {settings.dayOverrides[todayKey] && <button className="text-button" disabled={dayBusy} onClick={() => void overrideToday('auto')}>恢复日历</button>}
               <button className="text-button" disabled={calendarBusy} onClick={() => void refreshCalendar(true)}>{calendarBusy ? '更新中…' : '更新日历'}</button>
             </>}</div>
           </section>
+          {!demo && <WorkCalendar state={state} onSave={saveSchedule} />}
           <div className="dashboard-grid">
             <section className="earnings-card">
               <div className="card-top"><span className="section-label"><span className={`status-dot ${salary.status !== 'working' ? 'resting' : ''}`} />{salary.statusLabel}</span><span className="outlined-tag">{demo ? 'DEMO' : 'LIVE'}<span className="live-bars"><i /><i /><i /></span></span></div>
-              <div className="earnings-caption">今天，已经为自己赚了<button className="icon-button" onClick={() => void action(togglePrivacy, 'save')} aria-label={state.privacy ? '显示今日金额' : '隐藏今日金额'}>{state.privacy ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>
+              <div className="earnings-caption">{todaySchedule.isPreviousShift ? `${todaySchedule.label}，已经为自己赚了` : '今天，已经为自己赚了'}<button className="icon-button" onClick={() => void action(togglePrivacy, 'save')} aria-label={state.privacy ? '显示今日金额' : '隐藏今日金额'}>{state.privacy ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>
               <LiveAmount settings={settings} demo={demo} privacy={state.privacy} calendar={demo ? {} : state.calendar} />
               <div className="earning-rate"><span className="mint-badge"><ArrowUpRight size={15} />{amountText(salary.hourlyRate)} / 小时</span><span>{salary.status === 'working' ? `每一秒，预估 +${state.privacy ? '••••' : `${symbol}${salary.perSecond.toFixed(4)}`}` : salary.status === 'break' ? '午休暂停计薪，好好吃顿饭。' : salary.status === 'after' ? '今天辛苦了，把时间还给生活。' : '工作时段自动开始，不必手动打卡。'}</span></div>
               <div className="workday-track">
@@ -261,7 +272,7 @@ function App() {
           </div>
 
           <div className="lower-grid">
-            <SavingsBoard state={state} currentMonth={localMonthKey(realNow)} onConfigure={openSalarySettings} onSave={saveSavingsEntry} />
+            <SavingsBoard state={state} currentMonth={localMonthKey(realNow)} onConfigure={openSalarySettings} onSave={saveSavingsEntry} onDelete={removeSavingsEntry} />
             <section className="week-card"><div className="card-top"><div><h3>本周工资 <small>{settings.currency}</small></h3></div></div><div className="week-chart" role="img" aria-label={`本周每日预估收入：${salary.week.map(day => `${day.label} ${amountText(day.earned)}`).join('，')}`}>
             {salary.week.map(day => <div className={`chart-column ${day.isToday ? 'today' : ''} ${day.isFuture ? 'future' : ''}`} key={day.label}><div className="bar-value" title={state.privacy || day.isFuture ? undefined : amountText(day.earned)}>{state.privacy ? '•••' : day.isFuture ? '—' : cardFigure(day.earned)}</div><div className="bar-track"><div className="bar" style={{ '--bar-height': `${Math.max(5, (day.earned / (salary.dailySalary || 1)) * 100)}%` } as CSSProperties}>{day.isToday && <span>✦</span>}</div></div><span className="bar-label">{day.isToday ? '今天' : day.label}</span></div>)}
           </div><div className="chart-footer"><span><i className="legend-dot" />排班收入预估</span><span>{salary.workingDaysInMonth} 个本月计薪日</span></div></section>
@@ -269,9 +280,14 @@ function App() {
           
         </>}
 
+        {page === 'playground' && <section className="pong-launch"><div><span className="pong-launch-tag">NEW · 摸鱼球馆</span><h2>来一局，乒乓。</h2><p>和电脑过几招。鼠标移动球拍，随时收起，下次继续。</p></div><button className="button primary" onClick={() => setGameOpen(true)}>来打乒乓球<ArrowUpRight size={16} /></button></section>}
+
         {page === 'playground' && <div className="playground-grid"><section className="conversion-card"><h2>今天的努力，可以换成…</h2><p className="muted">换个单位，看见打工的快乐。</p><div className="conversion-items">{[{ label: '杯快乐咖啡', price: 25, icon: Coffee }, { label: '顿好好吃饭', price: 35, icon: Heart }, { label: '次轻松通勤', price: 10, icon: Zap }].map(item => <div key={item.label}><item.icon size={27} /><strong title={state.privacy ? undefined : money(salary.todayEarned / item.price, 1)}>{state.privacy ? '••' : cardFigure(salary.todayEarned / item.price, 1)}</strong><span>{item.label}</span><small>按 {symbol}{item.price} / 份估算</small></div>)}</div></section>{restCard}<section className="lab-quote"><Sparkles size={25} /><div><h2>{quotes[quote][0]}</h2><p>{quotes[quote][1]}</p></div><button className="button secondary" onClick={() => setQuote(v => (v + 1) % quotes.length)}>换一句<ArrowRight size={16} /></button></section><section className="lab-goal"><Target size={25} /><h2>下一个小快乐，由你定义。</h2><p>把咖啡、电影票或一顿大餐，变成看得见的期待。</p><button className="button primary" onClick={() => setGoalOpen(true)}><Plus size={16} />定个小目标</button></section><section className="lab-widget"><Monitor size={25} /><h2>小窗口，大动力。</h2><p>让跳动的工资，在你的桌面悄悄陪伴。</p><button className="button secondary" onClick={() => void action(openWidget, 'widget')}>打开悬浮窗<ArrowUpRight size={16} /></button></section></div>}
 
+
         {page === 'achievements' && <><div className="achievement-summary"><div className="achievement-emblem"><Trophy size={38} /></div><div><h2>{achievements.filter(a => a.unlocked).length} 枚小勋章，致认真生活的你。</h2><p>{demo ? '当前使用演示数据。保存你的工资设置后，将按真实排班重新计算。' : '每日与本月成就随当前排班计算；休息成就记录本次打开期间的体验。'}</p></div></div><div className="achievement-grid">{achievements.map(item => <section className={`achievement-card ${item.unlocked ? 'unlocked' : ''}`} key={item.title}><span className="achievement-icon"><item.icon size={31} /></span><span className="achievement-state">{item.unlocked ? <><Check size={12} />已解锁</> : '等待点亮'}</span><h3>{item.title}</h3><p>{item.caption}</p></section>)}</div></>}
+        {page === 'dashboard' && <DataBackup state={state} onRestore={value => { setState(value); setBreakStart(null); setCompletedBreaks(0); setToast('本地资料已恢复。'); }} />}
+        </>}
 
         <footer className="page-footer"><span><Flower2 size={14} />每一秒努力，都值得被看见。</span><span>仅作收入估算 · 工资数据保存在本机</span></footer>
       </main>

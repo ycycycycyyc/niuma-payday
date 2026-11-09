@@ -15,6 +15,7 @@ import { pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import asar from '@electron/asar';
 import widgetLayout from '../shared/widget-layout.json' with { type: 'json' };
+import { profileRevision } from '../shared/profile-backup.mjs';
 
 const originalCwd = process.cwd();
 const archiveArg = process.argv.slice(2).find(value => !value.startsWith('--'));
@@ -126,6 +127,11 @@ class BrowserWindow extends EventEmitter {
       getZoomFactor: () => 1,
       isDestroyed: () => false,
       setWindowOpenHandler: noop,
+      reload: () => {
+        this.reloads = (this.reloads ?? 0) + 1;
+        this.webContents.emit('did-start-loading');
+        queueMicrotask(() => this.webContents.emit('did-finish-load'));
+      },
       session: { setPermissionCheckHandler: noop, setPermissionRequestHandler: noop },
       send: (channel, value) => this.bridgeEvents?.emit(channel, {}, structuredClone(value)),
     });
@@ -229,6 +235,12 @@ class BrowserWindow extends EventEmitter {
 
   isDestroyed() {
     return this.destroyed;
+  }
+
+  destroy() {
+    this.destroyed = true;
+    this.webContents.emit('destroyed');
+    this.emit('closed');
   }
 
   getBounds() {
@@ -356,6 +368,41 @@ try {
   const saved = JSON.parse(fs.readFileSync(path.join(profile, 'state.json'), 'utf8'));
   assert.equal(saved.settings.startTime, '09:00');
   pass('actual packaged main handler persists monthly salary and working hours on disk');
+
+  if (api.writeDayOverrides) {
+    await api.writeDayOverrides({ '2026-11-10': 'work' }, { '2026-11-10': null });
+    await api.writeDayOverrides({ '2026-11-11': 'rest' }, { '2026-11-11': null });
+    assert.deepEqual((await api.getState()).settings.dayOverrides, { '2026-11-10': 'work', '2026-11-11': 'rest' });
+    await assert.rejects(api.writeDayOverrides({ '2026-11-10': 'rest' }, { '2026-11-10': null }), /其他窗口更新/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(profile, 'state.json'), 'utf8')).settings.dayOverrides,
+      { '2026-11-10': 'work', '2026-11-11': 'rest' });
+    await api.writeDayOverrides({ '2026-11-10': null, '2026-11-11': null }, { '2026-11-10': 'work', '2026-11-11': 'rest' });
+    pass('packaged schedule IPC merges independent dates, rejects a same-day conflict and confirms the exact patch on disk');
+  }
+
+  if (api.exportProfileBackup && api.importProfileBackup && api.deleteSavingsEntry) {
+    const originalBackup = await api.exportProfileBackup();
+    const entry = { month: '2020-12', currency: 'HKD', salaryCents: 68000, rentCents: 16000, livingCents: 20000 };
+    await api.writeSavingsEntry(entry, null);
+    await assert.rejects(api.importProfileBackup(originalBackup, profileRevision(originalBackup.profile)), /BACKUP_CONFLICT/);
+    const before = await api.exportProfileBackup();
+    const incoming = { ...before, profile: { ...before.profile, settings: { ...before.profile.settings, monthlySalary: 1234 }, savings: {} } };
+    await api.importProfileBackup(incoming, profileRevision(before.profile));
+    const snapshot = JSON.parse(fs.readFileSync(path.join(profile, 'state.json.backup-1'), 'utf8'));
+    assert.deepEqual(snapshot.savings[entry.month], entry);
+    assert.equal(snapshot.settings.monthlySalary, 680);
+    assert.equal((await api.getState()).settings.monthlySalary, 1234);
+    const current = await api.exportProfileBackup();
+    const invalid = { ...before, profile: { ...before.profile, savings: { [entry.month]: { ...entry, rentCents: -1 } } } };
+    await assert.rejects(api.importProfileBackup(invalid, profileRevision(current.profile)), /BACKUP_INVALID/);
+    await api.importProfileBackup(originalBackup, profileRevision(current.profile));
+    await api.writeSavingsEntry(entry, null);
+    await assert.rejects(api.deleteSavingsEntry({ ...entry, rentCents: 0 }), /SAVINGS_CONFLICT/);
+    const removed = await api.deleteSavingsEntry(entry);
+    assert.equal(removed.savings[entry.month], undefined);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'state.json'), 'utf8')).savings[entry.month], undefined);
+    pass('packaged backup IPC rejects stale imports and invalid rows, retains pre-import data, and confirms guarded ledger withdrawal on disk');
+  }
 
   await assert.rejects(api.setState({ ...state, settings: { ...state.settings, monthlySalary: -1 } }));
   const childFrame = frameFor(windows[0], true);
@@ -520,6 +567,62 @@ try {
     pass('the compact window starts on the saved layer after reopening the profile');
   }
   pass('fresh main-process instance reads persisted salary, hours and privacy from isolated disk');
+
+  if (windows[0].bridge.getProfileRecovery) {
+    const healthy = fs.readFileSync(path.join(profile, 'state.json'), 'utf8');
+    fs.writeFileSync(path.join(profile, 'state.json.backup-1'), healthy);
+    fs.writeFileSync(path.join(profile, 'state.json'), '{broken-primary');
+    app.quit();
+    app.removeAllListeners(); screen.removeAllListeners(); electronHost.powerMonitor.removeAllListeners(); ipcMain.removeAllListeners();
+    handlers.clear(); windows.length = 0;
+    await import(mainURL + '?recover-corrupt=3');
+    await Promise.resolve();
+    const recovered = windows[0].bridge;
+    assert.equal((await recovered.getProfileRecovery()).status, 'recovered');
+    assert.deepEqual(await recovered.getState(), JSON.parse(healthy));
+    assert.equal(fs.readFileSync(path.join(profile, 'state.json'), 'utf8'), '{broken-primary');
+    const quarantines = fs.readdirSync(profile).filter(name => name.startsWith('state.json.corrupt-'));
+    assert.ok(quarantines.some(name => fs.readFileSync(path.join(profile, name), 'utf8') === '{broken-primary'));
+    await recovered.setState(await recovered.getState());
+    assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'state.json'), 'utf8')).settings.monthlySalary, 680);
+    pass('fresh packaged main preserves corrupt source bytes, restores a valid snapshot and resumes guarded saving');
+
+    const main = windows[0];
+    main.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+    await Promise.resolve();
+    assert.equal(main.reloads, 1);
+    main.webContents.emit('render-process-gone', {}, { reason: 'oom' });
+    assert.equal(main.reloads, 1);
+    const recover = trayMenu.find(item => item.label === '恢复主窗口（页面异常）');
+    assert.ok(recover);
+    recover.click();
+    await Promise.resolve();
+    const rebuilt = windows.at(-1);
+    assert.notEqual(rebuilt, main);
+    assert.equal(main.isDestroyed(), true);
+    assert.equal((await rebuilt.bridge.getState()).settings.monthlySalary, 680);
+    pass('packaged renderer retries once, exposes a native recovery command after another failure, and rebuilds without losing the profile');
+
+    app.quit();
+    app.removeAllListeners(); screen.removeAllListeners(); electronHost.powerMonitor.removeAllListeners(); ipcMain.removeAllListeners();
+    handlers.clear(); windows.length = 0;
+    fs.writeFileSync(path.join(profile, 'state.json'), '{unpreservable-primary');
+    const originalWrite = fs.writeFileSync;
+    fs.writeFileSync = function (filename, ...args) {
+      if (String(filename).includes('state.json.corrupt-')) throw Object.assign(new Error('fixture: preservation denied'), { code: 'EACCES' });
+      return originalWrite(filename, ...args);
+    };
+    try {
+      await import(mainURL + '?blocked-recovery=4');
+      await Promise.resolve();
+      const blocked = windows[0].bridge;
+      assert.equal((await blocked.getProfileRecovery()).status, 'blocked');
+      assert.equal(await blocked.getState(), null);
+      await assert.rejects(blocked.setState(state), /PROFILE_RECOVERY_REQUIRED/);
+      assert.equal(fs.readFileSync(path.join(profile, 'state.json'), 'utf8'), '{unpreservable-primary');
+      pass('packaged recovery blocks profile replacement when corrupt source preservation is denied');
+    } finally { fs.writeFileSync = originalWrite; }
+  }
 } catch (error) {
   report.error = error.stack || String(error);
   console.error(report.error);

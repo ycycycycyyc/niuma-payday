@@ -1,5 +1,6 @@
-import { classifyDay, isValidDateKey, type CalendarCache } from '../../shared/calendar.mjs';
+import { classifyDay, dateKey, isValidDateKey, type CalendarCache } from '../../shared/calendar.mjs';
 export type { CalendarCache, CalendarYear } from '../../shared/calendar.mjs';
+export { dayOverridePatch, applyDayOverridePatch, type DayOverridePatch } from '../../shared/day-overrides.mjs';
 
 /** All schedules use the computer's local time zone. Currency is display-only. */
 export interface SalarySettings {
@@ -200,6 +201,27 @@ function makeShift(settings: SalarySettings, anchor: Date, dailySalary: number):
     lunchEnd,
     totalPaidSeconds,
     dailySalary,
+  };
+}
+
+/** The date shown by schedule controls must match an active overnight shift. */
+export function getScheduleContext(settings: SalarySettings, now: Date, calendar: CalendarCache = {}) {
+  const errors = validateSettings(settings);
+  if (Object.keys(errors).length) throw new RangeError(Object.values(errors)[0]);
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new RangeError('当前时间无效');
+  const today = localDay(now);
+  const yesterday = localDay(now, -1);
+  const prior = classifyDay(yesterday, settings, calendar).working ? makeShift(settings, yesterday, 0) : null;
+  const isPreviousShift = prior !== null && now >= prior.start && now < prior.end;
+  const date = isPreviousShift ? yesterday : today;
+  const classification = classifyDay(date, settings, calendar);
+  return {
+    ...classification,
+    reason: isPreviousShift ? classification.reason.replace(/^今天上班/, '上班').replace(/^今天休息/, '休息') : classification.reason,
+    date,
+    dateKey: dateKey(date),
+    isPreviousShift,
+    label: isPreviousShift ? `${date.getMonth() + 1}月${date.getDate()}日夜班` : '今日班次',
   };
 }
 
