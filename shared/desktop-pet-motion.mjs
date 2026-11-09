@@ -6,6 +6,7 @@ const SHORTEST_PAW_STEP = 4.5;
 const MAX_PAW_FRAMES_PER_SECOND = 16;
 const ARRIVAL_RADIUS = 1.3;
 const ACTION_POSES = ['stand', 'turn', 'crouch', 'sit', 'lift', 'paw', 'wag'];
+export const BONE_SIZE = 28;
 
 export function normalizePetLaunchPose(value) {
   if (!value || !Number.isInteger(value.frame) || !Number.isFinite(value.stepPhase)
@@ -29,6 +30,17 @@ export function clampPetCenter(point, bounds, size) {
     return Math.max(start + padding, Math.min(start + length - padding, value));
   }
   return { x: axis(point.x, bounds.x, bounds.width), y: axis(point.y, bounds.y, bounds.height) };
+}
+
+export function placeChaseBone(pointer, bounds, petSize) {
+  // Aim the sitting dog's paws at the marker, keeping its face clear in either
+  // direction. At the edges move the marker with the nearest reachable paws.
+  const left = pointer.x + (pointer.x + 10 + BONE_SIZE > bounds.x + bounds.width ? -32 : 10);
+  const top = pointer.y + (pointer.y + 9 + BONE_SIZE > bounds.y + bounds.height ? -30 : 9);
+  const center = clampPetCenter({ x: left + BONE_SIZE / 2, y: top + BONE_SIZE / 2 }, bounds, BONE_SIZE);
+  const pawOffset = Math.min(petSize * 0.34, Math.max(0, (bounds.height - BONE_SIZE) / 2));
+  const target = clampPetCenter({ x: center.x, y: center.y - pawOffset }, bounds, petSize);
+  return { target, position: { x: target.x - BONE_SIZE / 2, y: target.y + pawOffset - BONE_SIZE / 2 } };
 }
 
 // Clip the segment to the two occupied axis intervals. The earliest entry

@@ -9,13 +9,17 @@ async function paintedPet(desktop) {
       if (!dog || dog.hidden || !dog.getClientRects().length) return null;
       const r = dog.getBoundingClientRect();
       const bone = document.getElementById('desktop-bone');
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2, bone: !!bone && !bone.hidden && !!bone.getClientRects().length };
+      const held = bone && !bone.hidden ? bone.getBoundingClientRect() : null;
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      return { x, y, bone: Boolean(held?.width), pose: dog.dataset.pose,
+        boneGap: held ? Math.hypot(x - held.x - held.width / 2, r.y + r.height * 0.84 - held.y - held.height / 2) : Infinity };
     }).catch(error => { if (!page.isClosed()) throw error; return null; });
     if (!frame || page.isClosed()) continue;
     const native = await desktop.browserWindow(page);
     try {
       const win = await native.evaluate(w => ({ ...w.getContentBounds(), zoom:w.webContents.getZoomFactor(), top:w.isAlwaysOnTop(), id:w.getMediaSourceId() }));
-      return { x:win.x + frame.x * win.zoom, y:win.y + frame.y * win.zoom, bone:frame.bone, top:win.top, id:win.id };
+      return { x:win.x + frame.x * win.zoom, y:win.y + frame.y * win.zoom, bone:frame.bone,
+        pose:frame.pose, boneGap:frame.boneGap * win.zoom, top:win.top, id:win.id };
     } finally { await native.dispose(); }
   }
   return null;
@@ -83,8 +87,7 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
         const sample = { time, x: rect.x, y: rect.y };
         const walking = visible(dog) && visible(bone) && !visible(menu) && dog.dataset.feeding !== 'true' && dog.dataset.pose === 'walk';
         if (!walking) {
-          // Hovering her now opens a food menu and intentionally pauses pursuit.
-          // A pause or arrival ends this sample; try a farther pointer target.
+          // Arrival ends this sample; try a farther pointer target.
           if (samples.length) { finish(false, 'walking ended at a menu or arrival'); return; }
           consecutiveMoves = 0;
         } else if (!samples.length) {
@@ -105,9 +108,7 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
   record(`after ${cadence.startup.toFixed(1)} ms startup, the desktop dog advanced on ${cadence.moving}/${cadence.refreshes} walking display refreshes, median interval ${cadence.median.toFixed(1)} ms (${attempts.length} sample attempts)`);
   await expect.poll(async () => {
     const pet = await paintedPet(desktop);
-    // The visible bone was checked during cadence. At the destination the new
-    // feeding menu may legitimately replace it and pause the dog.
-    return pet?.top && Math.hypot(pet.x - target.x, pet.y - target.y) < 100;
+    return pet?.top && pet.bone && pet.pose === 'wag' && pet.boneGap < 3;
   }, { timeout:12000 }).toBe(true);
   const outdoors = await paintedPet(desktop);
   if (verifyOrder) await verifyOrder(outdoors);
@@ -155,8 +156,8 @@ export async function verifyDesktopChase(desktop, widget, { click, move, clickTh
   await move(controlPoint);
   await expect.poll(async () => {
     const pet = await paintedPet(desktop);
-    return pet ? Math.hypot(pet.x - controlPoint.x, pet.y - controlPoint.y) : Infinity;
-  }, { timeout: 8000 }).toBeLessThan(35);
+    return pet?.bone && pet.pose === 'wag' && pet.boneGap < 3;
+  }, { timeout: 8000 }).toBe(true);
   await widget.waitForTimeout(320);
   await click(button('收起骨头'));
   await expect(button('拿起骨头')).toHaveAttribute('aria-pressed', 'false');

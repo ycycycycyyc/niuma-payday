@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Bone } from 'lucide-react';
-import { clampPetCenter, createDesktopPetMotion, normalizePetLaunchPose, stepDesktopPetMotion, type DesktopPetMotion, type DesktopPetPoint } from '../../shared/desktop-pet-motion.mjs';
+import { clampPetCenter, createDesktopPetMotion, normalizePetLaunchPose, placeChaseBone, stepDesktopPetMotion, type DesktopPetMotion, type DesktopPetPoint } from '../../shared/desktop-pet-motion.mjs';
 import { applyPetSprite, loadPetSpriteArtwork } from '../lib/pet-sprite';
 import type { DesktopPetState } from '../lib/store';
 import './browser-chasing-pet.css';
@@ -95,12 +95,12 @@ export default function BrowserChasingPet({ active, anchor, boneButton, onStateC
       report.current({ phase: 'docked', ...(point ? { dockX: point.x, facing } : {}) });
     }
 
-    function paintBone() {
-      bone.hidden = document.hidden || phase !== 'chasing' || !requestedActive || !pointer;
-      if (bone.hidden || !pointer) return;
-      const x = pointer.x + (pointer.x + 39 > innerWidth ? -32 : 10);
-      const y = pointer.y + (pointer.y + 37 > innerHeight ? -30 : 9);
-      bone.style.transform = `translate3d(${Math.max(0, Math.min(innerWidth - 28, x))}px, ${Math.max(0, Math.min(innerHeight - 28, y))}px, 0)`;
+    function paintBone(size = home()?.size) {
+      bone.hidden = document.hidden || phase !== 'chasing' || !requestedActive || !pointer || !size;
+      if (bone.hidden || !pointer || !size) return null;
+      const { target, position } = placeChaseBone(pointer, viewport(), size);
+      bone.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`;
+      return target;
     }
 
     function paintDog(size: number) {
@@ -131,19 +131,18 @@ export default function BrowserChasingPet({ active, anchor, boneButton, onStateC
       const destination = home();
       if (!destination) { dock(); return; }
       const returning = phase === 'returning';
-      if (!returning && !pointer) { lastTime = null; paintDog(destination.size); return; }
+      const target = returning ? destination : paintBone(destination.size);
+      if (!target) { lastTime = null; paintDog(destination.size); return; }
       if (!returning) {
         trip.pet = { ...trip.pet, ...clampPetCenter(trip.pet, viewport(), destination.size) };
       }
-      const target = returning ? destination : clampPetCenter({ x: pointer!.x - 15, y: pointer!.y + 18 }, viewport(), destination.size);
       // An idle wake starts with elapsed=0. Its previous arrival belongs to the
       // old target, so it cannot stop a new chase or complete a new return.
-      if (trip.pet.arrived && (returning || Math.hypot(target.x - trip.pet.x, target.y - trip.pet.y) > 5)) {
+      if (trip.pet.arrived && (returning || Math.hypot(target.x - trip.pet.x, target.y - trip.pet.y) >= 5)) {
         trip.pet = { ...trip.pet, arrived: false };
       }
       trip.pet = stepDesktopPetMotion(trip.pet, target, lastTime === null ? 0 : time - lastTime, { returning, reducedMotion: quiet.matches });
       paintDog(destination.size);
-      paintBone();
       if (returning && trip.pet.arrived && Math.hypot(destination.x - trip.pet.x, destination.y - trip.pet.y) <= 1.3) {
         dock(destination);
         return;

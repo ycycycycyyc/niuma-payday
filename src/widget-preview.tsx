@@ -229,7 +229,7 @@ function Preview() {
         src={dashboard.html ? undefined : '#preview-dashboard'} sandbox={dashboard.html ? 'allow-scripts allow-forms' : undefined} />}
       {(surface === 'hidden' || surface === 'companion') && <button type="button" className="preview-reopen" onClick={show}><Monitor size={16} />开启浮窗</button>}
     </div>
-    <footer className="preview-bottom"><span>{surface === 'dashboard' ? '设置仅在本次预览中生效。' : surface === 'widget' ? '拖动浮窗，看看不同位置的光影。' : surface === 'companion' ? '双击狗狗，唤回浮窗。' : '浮窗已隐藏'}</span>
+    <footer className="preview-bottom"><span>{surface === 'dashboard' ? '设置仅在本次预览中生效。' : surface === 'widget' ? '拖动浮窗，看看不同位置的光影。' : surface === 'companion' ? '拖动狗狗可以换个位置，双击恢复浮窗。' : '浮窗已隐藏'}</span>
       {position && surface === 'widget' && <button onClick={() => setPosition(null)}>回到中央</button>}
     </footer>
   </div>;

@@ -93,10 +93,16 @@ test('the browser dog follows the bone in two dimensions outside the card and ei
     { side: 'right', x: bounds.x + bounds.width + 180, y: bounds.y + 60 },
     { side: 'above', x: bounds.x + bounds.width / 2, y: bounds.y - 180 },
     { side: 'below', x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height + 180 },
+    { side: 'near edge', x: 1202, y: 803 },
+    { side: 'marker flips', x: 1203, y: 804 },
     { side: 'corner', x: 0, y: 0 },
     { side: 'corner', x: 1239, y: 839 },
   ]) {
     await page.mouse.move(point.x, point.y);
+    if (point.side === 'marker flips') {
+      await page.clock.runFor(64);
+      await expect(roaming).toHaveAttribute('data-pose', 'walk');
+    }
     await page.clock.runFor(4000);
     await expect(roaming).toBeVisible();
     const chased = await box(roaming);
@@ -111,7 +117,10 @@ test('the browser dog follows the bone in two dimensions outside the card and ei
     await expect(marker).toBeVisible();
     const held = await box(marker);
     expect(Math.abs(held.x + held.width / 2 - point.x)).toBeLessThan(40);
-    expect(Math.abs(held.y + held.height / 2 - point.y)).toBeLessThan(40);
+    expect(Math.abs(held.y + held.height / 2 - point.y)).toBeLessThan(chased.height * 0.84 + 1);
+    await expect(roaming).toHaveAttribute('data-pose', 'wag');
+    expect(Math.hypot(chased.x + chased.width / 2 - held.x - held.width / 2,
+      chased.y + chased.height * 0.84 - held.y - held.height / 2)).toBeLessThan(1);
   }
   expect(await box(card)).toEqual(bounds);
   await page.keyboard.press('Escape');
@@ -178,7 +187,7 @@ test('taking the bone again interrupts the return and dragging or resizing updat
   await expect(page.locator('.widget-dog:visible')).toHaveCount(1);
 });
 
-test('reduced motion places the browser dog at the pointer and returns it immediately', async ({ page }) => {
+test('reduced motion places the browser dog at the visible bone and returns it immediately', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const card = page.getByRole('region', { name: '工资悬浮窗' });
   const dog = page.locator('.widget-dog');
@@ -190,8 +199,9 @@ test('reduced motion places the browser dog at the pointer and returns it immedi
   await expect(roaming).toBeVisible();
   await expect(dog).toBeHidden();
   const placed = await box(roaming);
-  expect(Math.abs(placed.x + placed.width / 2 - 100)).toBeLessThan(100);
-  expect(Math.abs(placed.y + placed.height / 2 - 90)).toBeLessThan(100);
+  const bone = await box(page.locator('.pet-held-bone'));
+  expect(Math.hypot(placed.x + placed.width / 2 - bone.x - bone.width / 2,
+    placed.y + placed.height * 0.84 - bone.y - bone.height / 2)).toBeLessThan(1);
   await page.clock.runFor(1000);
   expect(await box(roaming)).toEqual(placed);
   await page.keyboard.press('Escape');

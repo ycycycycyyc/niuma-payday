@@ -23,8 +23,8 @@
   color: inherit;
   box-shadow: none;
   pointer-events: auto;
-  cursor: pointer;
-  touch-action: manipulation;
+  cursor: grab;
+  touch-action: none;
   transition: none;
   will-change: transform;
   -webkit-app-region: no-drag;
@@ -35,6 +35,7 @@
   box-shadow: none;
 }
 .companion-pet-field .companion-pet-dog[hidden] { display: none; }
+.companion-pet-field .companion-pet-dog[data-dragging="true"] { cursor: grabbing; }
 .companion-pet-dog:focus { outline: none; }
 .companion-pet-dog:focus-visible { outline: 2px solid #785d62; outline-offset: 1px; }
 .companion-pet-sprite {

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type KeyboardEvent } from 'react';
-import { createCompanionMotion, stepCompanionMotion } from '../../shared/desktop-pet-companion.mjs';
+import { createCompanionMotion, placeCompanionMotion, stepCompanionMotion } from '../../shared/desktop-pet-companion.mjs';
 import { applyPetSprite, loadPetSpriteArtwork } from '../lib/pet-sprite';
 import { createPetRestoreTarget } from '../lib/pet-restore-target';
 import './companion-pet.css';
@@ -25,7 +25,14 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
     let lastTime: number | null = null;
     let decoded = false;
     let disposed = false;
-    const restoreTarget = createPetRestoreTarget(dog);
+    const restoreTarget = createPetRestoreTarget(dog, {
+      onDrag(center) {
+        const fieldRect = field.getBoundingClientRect();
+        pet = placeCompanionMotion(pet, { x: center.x - fieldRect.x, y: center.y - fieldRect.y }, bounds);
+        paint();
+      },
+      onRelease() { lastTime = null; wake(); },
+    });
 
     void loadPetSpriteArtwork().then(ready => {
       if (disposed) return;
@@ -51,12 +58,12 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
     }
 
     function wake() {
-      if (!raf && !document.hidden && decoded) raf = requestAnimationFrame(draw);
+      if (!raf && !disposed && !document.hidden && decoded) raf = requestAnimationFrame(draw);
     }
 
     function draw(time: number) {
       raf = 0;
-      if (document.hidden) return;
+      if (document.hidden || restoreTarget.dragging) return;
       pet = stepCompanionMotion(pet, lastTime === null ? 0 : time - lastTime, { bounds, size, reducedMotion: quiet.matches });
       paint();
       if (!quiet.matches) {
@@ -77,6 +84,7 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
       cancelAnimationFrame(raf);
       raf = 0;
       lastTime = null;
+      restoreTarget.release();
       restoreTarget.clear();
       if (document.hidden) pet = stepCompanionMotion(pet, 0, { bounds, size, paused: true });
       else measure();
@@ -105,7 +113,7 @@ export default function CompanionPet({ origin, onRestore }: { origin: CompanionO
 
   return <div className="companion-pet-field" ref={fieldRef}>
     <button type="button" className="companion-pet-dog" ref={dogRef}
-      aria-label="双击狗狗恢复浮窗" title="双击狗狗恢复浮窗"
+      aria-label="双击狗狗恢复浮窗" title="拖动狗狗，双击恢复浮窗"
       onDoubleClick={onRestore} onKeyDown={keyRestore} hidden>
       <span className="companion-pet-sprite" ref={spriteRef} aria-hidden="true" />
     </button>

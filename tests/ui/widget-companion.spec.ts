@@ -72,7 +72,7 @@ test('browser companion keeps moving under the pointer and after a single click,
   expect(errors).toEqual([]);
 });
 
-test('a moving companion accepts the second click at its first trailing-edge position without pausing', async ({ page }) => {
+test('after a drag, a moving companion accepts both clicks at its first trailing-edge position without pausing', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.clock.install();
   await page.addInitScript(() => { Math.random = () => 0.6; });
@@ -81,6 +81,16 @@ test('a moving companion accepts the second click at its first trailing-edge pos
   const before = await floatingCard(page).boundingBox();
   await minimize(page);
   const dog = companionDog(page);
+  const take = await position(dog);
+  await page.mouse.move(take.x + take.width / 2, take.y + take.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(420, 300);
+  const held = await position(dog);
+  await page.clock.runFor(300);
+  expect(await position(dog)).toEqual(held);
+  await page.mouse.up();
+  expect(held.x + held.width / 2).toBeCloseTo(420, 0);
+  expect(held.y + held.height / 2).toBeCloseTo(300, 0);
   const { previous, current } = await walkingSegment(page, dog);
   const point = {
     x: current.x + (current.x > previous.x ? 2 : current.width - 2),
@@ -97,6 +107,32 @@ test('a moving companion accepts the second click at its first trailing-edge pos
   expect(await floatingCard(page).boundingBox()).toEqual(before);
   await expect(dog).toHaveCount(0);
   await expect(page.locator('.widget-dog')).toHaveCount(1);
+});
+
+test('a minimized companion can be dragged by its feet, dropped and double-clicked at the new location', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await page.getByRole('button', { name: '开启悬浮窗', exact: true }).click();
+  const cardBefore = await position(floatingCard(page));
+  await minimize(page);
+  const dog = companionDog(page);
+  const before = await position(dog);
+  const grip = { x: before.width * .7, y: before.height * .9 };
+  const destination = { x: 260, y: 210 };
+  await page.mouse.move(before.x + grip.x, before.y + grip.y);
+  await page.mouse.down();
+  await page.mouse.move(destination.x + grip.x, destination.y + grip.y);
+  await expect(dog).toHaveAttribute('data-dragging', 'true');
+  const held = await position(dog);
+  expect(held.x).toBeCloseTo(destination.x, 0);
+  expect(held.y).toBeCloseTo(destination.y, 0);
+  await page.mouse.up();
+  await expect(dog).not.toHaveAttribute('data-dragging', 'true');
+  await expect(floatingCard(page)).toHaveCount(0);
+  expect(await position(dog)).toEqual(held);
+  await dog.dblclick();
+  await expect(floatingCard(page)).toBeVisible();
+  expect(await position(floatingCard(page))).toEqual(cardBefore);
 });
 
 test('offline preview keeps its companion through wallpaper changes and restores the original card position', async ({ page }) => {

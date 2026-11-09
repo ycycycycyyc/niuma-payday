@@ -20,7 +20,8 @@ html, body {
   will-change: transform;
   background: transparent;
 }
-#desktop-dog[data-interactive="true"] { pointer-events: auto; cursor: pointer; }
+#desktop-dog[data-interactive="true"] { pointer-events: auto; cursor: grab; touch-action: none; }
+#desktop-dog[data-dragging="true"] { cursor: grabbing; }
 #desktop-dog[data-feedable="true"] { pointer-events: auto; cursor: pointer; }
 #desktop-dog:focus { outline: none; }
 #desktop-dog:focus-visible { outline: 2px solid #785d62; outline-offset: 1px; }

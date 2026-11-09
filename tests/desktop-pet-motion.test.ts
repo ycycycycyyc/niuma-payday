@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, normalizePetLaunchPose, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
+import { acrossDesktopGap, BONE_SIZE, clampPetCenter, createDesktopPetMotion, normalizePetLaunchPose, placeChaseBone, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
 
 test('takeoff starts on the exact ledge sprite frame and retains the fractional step and sideways velocity', () => {
   const origin = { x: 110, y: 40, facing: -1 };
@@ -90,6 +90,28 @@ test('display corners respect sprite size, negative origins, and screens smaller
   const left = { x: -1280, y: -60, width: 1280, height: 720 };
   assert.deepEqual(clampPetCenter({ x: -1300, y: 660 }, left, 68), { x: -1246, y: 626 });
   assert.deepEqual(clampPetCenter({ x: 10, y: 20 }, { x: 0, y: 0, width: 30, height: 40 }, 68), { x: 15, y: 20 });
+});
+
+test('the sitting paws reach the drawn bone across edge flips and sprite scales', () => {
+  const area = { x: -1000, y: -500, width: 800, height: 600 };
+  for (const size of [54, 76, 114]) {
+    for (const pointer of [{ x: -500, y: -250 }, { x: -238, y: 63 }, { x: -237, y: 64 },
+      { x: -1000, y: -500 }, { x: -201, y: 99 }]) {
+      const { position, target } = placeChaseBone(pointer, area, size);
+      const center = { x: position.x + BONE_SIZE / 2, y: position.y + BONE_SIZE / 2 };
+      assert.equal(center.x, target.x);
+      assert.ok(Math.abs(center.y - (target.y + size * 0.34)) < 0.001);
+      assert.deepEqual(clampPetCenter(target, area, size), target);
+      assert.deepEqual(clampPetCenter(center, area, BONE_SIZE), center);
+    }
+  }
+  const before = placeChaseBone({ x: -238, y: 63 }, area, 76);
+  const after = placeChaseBone({ x: -237, y: 64 }, area, 76);
+  assert.ok(before.target.x - after.target.x > 5 && before.target.y - after.target.y > 5,
+    'a one-pixel mouse move can put the bone on the other side');
+  const sitting = stepDesktopPetMotion(createDesktopPetMotion(before.target), before.target, 16);
+  assert.equal(sitting.pose, 'wag');
+  assert.equal(stepDesktopPetMotion(sitting, after.target, 16).pose, 'walk');
 });
 
 test('a dog crossing an offset desktop skips only the gap and reappears on the first screen in her path', () => {

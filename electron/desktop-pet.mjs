@@ -1,10 +1,9 @@
 import path from 'node:path';
 import { BrowserWindow, screen } from 'electron';
 import { petLaneHeight } from '../shared/widget-geometry.mjs';
-import { acrossDesktopGap, clampPetCenter, createDesktopPetMotion, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
-import { createCompanionMotion, stepCompanionMotion } from '../shared/desktop-pet-companion.mjs';
+import { acrossDesktopGap, BONE_SIZE, clampPetCenter, createDesktopPetMotion, placeChaseBone, stepDesktopPetMotion } from '../shared/desktop-pet-motion.mjs';
+import { createCompanionMotion, placeCompanionMotion, stepCompanionMotion } from '../shared/desktop-pet-companion.mjs';
 
-const BONE_SIZE = 28;
 const FIRST_PAINT_TIMEOUT = 5000;
 const COLD_SURFACE_MS = 250;
 const RESTORE_TARGET_MS = 650;
@@ -22,7 +21,19 @@ function hideSurface(surface) {
   surface.acceptsMouse = false;
 }
 
-// Only the companion dog accepts input so she can restore the widget.
+function companionReleasePoint(surface, client) {
+  // This unzoomed renderer reports CSS pixels relative to the capturing window.
+  const bounds = surface.win.getContentBounds();
+  const point = { x: Math.round(bounds.x + client.x), y: Math.round(bounds.y + client.y) };
+  if (process.platform !== 'win32' || (client.x >= 0 && client.x < bounds.width &&
+      client.y >= 0 && client.y < bounds.height)) return point;
+  // Outside that window, its local DIPs still use the source display scale.
+  // Convert via physical pixels to get the destination display's desktop DIPs.
+  const physical = screen.dipToScreenRect(surface.win, { ...point, width: 1, height: 1 });
+  return screen.screenToDipPoint({ x: physical.x, y: physical.y });
+}
+
+// Only the companion dog accepts input for dragging and restoring the widget.
 // Chasing and returning dogs stay click-through; feeding belongs to the widget.
 function createSurface(area, root, developmentURL) {
   const createdAt = performance.now();
@@ -155,6 +166,30 @@ export class DesktopPet {
       cursor.y >= target.y && cursor.y < target.y + target.height;
   }
 
+  companionGesture(event, surface, phase, point) {
+    if (!this.holdsCompanion(event, surface) || this.trip.suspended) return;
+    const trip = this.trip;
+    if (phase === 'press') {
+      if (trip.press || !point || ![point.x, point.y].every(Number.isFinite) ||
+          Math.max(Math.abs(point.x), Math.abs(point.y)) > trip.size / 2 + 1) return;
+      trip.press = { surface, offset: point, dragging: false };
+    } else {
+      if (trip.press?.surface !== surface) return;
+      if (phase === 'drag') {
+        trip.press.dragging = true;
+        trip.restoreTarget = null;
+      } else if (phase === 'release') {
+        // A quick move after mouseup can precede this IPC. Use the actual
+        // release event's position for the last drag frame.
+        if (trip.press.dragging && point && [point.x, point.y].every(Number.isFinite)) {
+          this.tick(companionReleasePoint(surface, point));
+        }
+        trip.press = null;
+      } else return;
+    }
+    this.tick(screen.getCursorScreenPoint());
+  }
+
   overWidgetCard(cursor) {
     const widget = this.getWidget();
     if (!widget || widget.isDestroyed() || !widget.isVisible() || widget.isMinimized()) return false;
@@ -172,8 +207,11 @@ export class DesktopPet {
     for (const surface of this.surfaces.values()) {
       if (surface.win.isDestroyed()) continue;
       const b = surface.win.getBounds();
-      const accepts = Boolean(surface.shown && hit && cursor.x >= b.x && cursor.x < b.x + b.width &&
-        cursor.y >= b.y && cursor.y < b.y + b.height);
+      // Pointer capture belongs to the surface where the press began, even
+      // when the pointer races beyond the sprite or crosses to another display.
+      const press = this.trip?.press;
+      const accepts = Boolean(surface.shown && (press ? press.surface === surface :
+        hit && cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height));
       if (accepts !== Boolean(surface.acceptsMouse)) {
         surface.win.setIgnoreMouseEvents(!accepts);
         surface.acceptsMouse = accepts;
@@ -194,10 +232,17 @@ export class DesktopPet {
   tickCompanion(cursor) {
     const trip = this.trip;
     const now = performance.now();
-    const area = screen.getDisplayNearestPoint({ x: Math.round(trip.pet.x), y: Math.round(trip.pet.y) }).workArea;
-    trip.pet = stepCompanionMotion(trip.pet, now - trip.lastTime, {
-      bounds: area, size: trip.size, reducedMotion: trip.reduced,
-    });
+    if (trip.press?.dragging) {
+      const { offset } = trip.press;
+      // Electron's global cursor and work areas use the same desktop DIP space.
+      const area = screen.getDisplayNearestPoint(cursor).workArea;
+      trip.pet = placeCompanionMotion(trip.pet, { x: cursor.x + offset.x, y: cursor.y + offset.y }, area);
+    } else {
+      const area = screen.getDisplayNearestPoint({ x: Math.round(trip.pet.x), y: Math.round(trip.pet.y) }).workArea;
+      trip.pet = stepCompanionMotion(trip.pet, now - trip.lastTime, {
+        bounds: area, size: trip.size, reducedMotion: trip.reduced,
+      });
+    }
     trip.lastTime = now;
     this.paint({ ...trip.pet, ...(trip.reduced ? { vx: 0, vy: 0 } : {}) }, trip.size, null);
     this.syncPetMouseRegion(cursor);
@@ -225,6 +270,7 @@ export class DesktopPet {
     clearInterval(this.companionTimer);
     this.companionTimer = undefined;
     this.trip.suspended = true;
+    this.trip.press = null;
     this.trip.restoreTarget = null;
     for (const surface of this.surfaces.values()) hideSurface(surface);
   }
@@ -387,6 +433,7 @@ export class DesktopPet {
       if (fromLaunchSurface(event)) this.trip.confirmFirstFrame?.();
     });
     contents.ipc.on('niuma:desktop-pet-restore-target', (event, rect) => this.setRestoreTarget(event, surface, rect));
+    contents.ipc.on('niuma:desktop-pet-gesture', (event, phase, point) => this.companionGesture(event, surface, phase, point));
     contents.ipc.on('niuma:desktop-pet-restore-widget', event => {
       if (!this.holdsCompanion(event, surface) || this.restoring) return;
       this.restoring = true;
@@ -416,6 +463,7 @@ export class DesktopPet {
         surface.lastFrame = '';
       } else {
         this.surfaces.delete(id);
+        if (this.trip?.press?.surface === surface) this.trip.press = null;
         surface.win.destroy();
         if (this.trip?.launchSurface === surface) this.end();
       }
@@ -447,11 +495,8 @@ export class DesktopPet {
       const home = this.home(widget, trip);
       const returning = this.state.phase === 'returning';
       const area = screen.getDisplayNearestPoint(cursor).workArea;
-      const bone = returning ? null : {
-        x: clamp(cursor.x + (cursor.x + 38 > area.x + area.width ? -32 : 10), area.x, area.x + area.width - BONE_SIZE),
-        y: clamp(cursor.y + (cursor.y + 37 > area.y + area.height ? -30 : 9), area.y, area.y + area.height - BONE_SIZE),
-      };
-      const target = returning ? home : clampPetCenter({ x: cursor.x - 15, y: cursor.y + 18 }, area, home.size);
+      const bone = returning ? null : placeChaseBone(cursor, area, home.size);
+      const target = bone?.target ?? home;
       const now = performance.now();
       const pet = stepDesktopPetMotion(trip.pet, target, now - trip.lastTime, { returning, reducedMotion: trip.reduced });
       trip.lastTime = now;
@@ -460,7 +505,7 @@ export class DesktopPet {
       const position = acrossDesktopGap(pet, target, this.displays.map(display => display.bounds));
       trip.pet = { ...pet, x: position.x, y: position.y };
       if (returning && pet.arrived) { this.end({ dockX: home.cssX, facing: pet.facing }); return; }
-      this.paint(trip.pet, home.size, bone);
+      this.paint(trip.pet, home.size, bone?.position ?? null);
       this.syncPetMouseRegion(cursor);
       if (!returning && pet.arrived) trip.idleCursor = cursor;
     } catch (error) {
@@ -475,7 +520,10 @@ export class DesktopPet {
     const sampleTime = performance.now();
     for (const display of this.displays) {
       const area = display.workArea;
-      const dogHere = intersects(area, left, top, size);
+      // Keep the capturing renderer alive, with its button drawn outside the
+      // viewport, until it receives pointerup on a cross-display drag.
+      const dogHere = intersects(area, left, top, size) ||
+        (this.trip?.press && this.trip.press.surface === this.surfaces.get(display.id));
       const boneHere = bone && intersects(area, bone.x, bone.y, BONE_SIZE);
       if (!dogHere && !boneHere) {
         const idle = this.surfaces.get(display.id);

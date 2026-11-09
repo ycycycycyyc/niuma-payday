@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('petOverlay', {
   firstFramePainted: () => ipcRenderer.send('niuma:desktop-pet-first-paint'),
   restoreWidget: () => ipcRenderer.send('niuma:desktop-pet-restore-widget'),
   setRestoreTarget: rect => ipcRenderer.send('niuma:desktop-pet-restore-target', rect),
+  companionGesture: (phase, point) => ipcRenderer.send('niuma:desktop-pet-gesture', phase, point),
   feed: food => {
     if (food === 'kibble' || food === 'stick') ipcRenderer.send('niuma:desktop-pet-feed', food);
   },

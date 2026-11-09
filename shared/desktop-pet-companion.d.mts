@@ -21,6 +21,7 @@ export interface CompanionMotionState {
   workArea: CompanionBounds; spriteSize: number; suspended: boolean;
 }
 export function createCompanionMotion(pet: CompanionSeed, bounds: CompanionBounds, size: number): CompanionMotionState;
+export function placeCompanionMotion(state: CompanionMotionState, point: { x: number; y: number }, bounds: CompanionBounds): CompanionMotionState;
 export function stepCompanionMotion(state: CompanionMotionState, elapsedMs: number, options?: {
   bounds?: CompanionBounds; size?: number; paused?: boolean; reducedMotion?: boolean; random?: () => number;
 }): CompanionMotionState;

@@ -9,6 +9,10 @@ export interface DesktopPetMotion extends DesktopPetPoint {
 export function normalizePetLaunchPose(value: unknown): DesktopPetLaunchPose | undefined;
 export function createDesktopPetMotion(seed: DesktopPetPoint & { facing?: 1 | -1; launchPose?: DesktopPetLaunchPose }): DesktopPetMotion;
 export function clampPetCenter(point: DesktopPetPoint, bounds: DesktopPetBounds, size: number): DesktopPetPoint;
+export const BONE_SIZE: number;
+export function placeChaseBone(pointer: DesktopPetPoint, bounds: DesktopPetBounds, petSize: number): {
+  target: DesktopPetPoint; position: DesktopPetPoint;
+};
 export function acrossDesktopGap(point: DesktopPetPoint, target: DesktopPetPoint, displayBounds: DesktopPetBounds[]): DesktopPetPoint;
 export function stepDesktopPetMotion(state: DesktopPetMotion, target: DesktopPetPoint, elapsedMs: number, options?: {
   returning?: boolean; reducedMotion?: boolean;

@@ -8,7 +8,10 @@ import { createCompanionMotion } from '../shared/desktop-pet-companion.mjs';
 const bounds = { x: -2000, y: -1200, width: 4000, height: 2400 };
 const hostURL = 'data:text/javascript,' + encodeURIComponent(`
   export class BrowserWindow {}
-  export const screen = { getDisplayNearestPoint: () => ({ workArea: ${JSON.stringify(bounds)} }) };
+  export let cursor = { x: -500, y: 200 };
+  export const moveCursor = point => { cursor = point; };
+  export const screen = { getDisplayNearestPoint: () => ({ workArea: ${JSON.stringify(bounds)} }),
+    getCursorScreenPoint: () => cursor };
 `);
 const hook = registerHooks({
   resolve(specifier, context, next) {
@@ -16,6 +19,7 @@ const hook = registerHooks({
   },
 });
 const { DesktopPet } = await import('../electron/desktop-pet.mjs');
+const { moveCursor, screen } = await import(hostURL);
 hook.deregister();
 
 function companion(size = 76) {
@@ -121,4 +125,93 @@ test('only an owned companion surface can retain its current dog-sized input tar
   assert.ok(pet.trip.restoreTarget);
   pet.setRestoreTarget(event, surface, null);
   assert.equal(pet.trip.restoreTarget, null);
+});
+
+test('a captured companion follows the grab point, releases the desktop and resumes walking at the drop', () => {
+  const { pet, surface } = companion();
+  pet.trip.pet = createCompanionMotion({ x: -500, y: 200, facing: 1 }, bounds, 76);
+  pet.trip.lastTime = performance.now();
+  pet.paint = () => {};
+  const event = { processId: 7, frameId: 8 };
+  const grip = { x: -12, y: -35 };
+  moveCursor({ x: -488, y: 235 });
+  pet.companionGesture({ ...event, frameId: 99 }, surface, 'press', grip);
+  pet.companionGesture(event, surface, 'press', { x: 42, y: 0 });
+  assert.equal(pet.trip.press, undefined);
+
+  pet.companionGesture(event, surface, 'press', grip);
+  const cursor = { x: 310, y: 510 };
+  moveCursor(cursor);
+  pet.syncPetMouseRegion(cursor);
+  assert.equal(surface.acceptsMouse, true, 'a quick move cannot lose the pointerup');
+  pet.companionGesture(event, surface, 'drag');
+  const drop = { x: 298, y: 475 };
+  const position = () => ({ x: pet.trip.pet.x, y: pet.trip.pet.y });
+  assert.deepEqual(position(), drop);
+  pet.trip.lastTime = performance.now() - 500;
+  pet.tick(cursor);
+  assert.deepEqual(position(), drop, 'autonomy is suspended during drag');
+
+  moveCursor({ x: -2000, y: -1200 });
+  pet.tick({ x: -2000, y: -1200 });
+  assert.deepEqual(position(), { x: -1962, y: -1162 }, 'the full dog remains inside the display work area');
+  moveCursor({ x: -500, y: 200 });
+  pet.companionGesture(event, surface, 'release', { x: cursor.x - bounds.x, y: cursor.y - bounds.y });
+  assert.deepEqual(position(), drop);
+  assert.equal(pet.trip.press, null);
+  pet.syncPetMouseRegion({ x: -500, y: 200 });
+  assert.equal(surface.acceptsMouse, false, 'the vacated desktop is click-through');
+  for (let frame = 0; frame < 90; frame++) {
+    pet.trip.lastTime = performance.now() - 24;
+    pet.tick({ x: -500, y: 200 });
+  }
+  assert.ok(Math.hypot(pet.trip.pet.x - drop.x, pet.trip.pet.y - drop.y) > 5);
+  assert.equal(pet.state.phase, 'companion');
+});
+
+test('dragging across displays keeps the source capture alive and drops in the destination display DIPs', (t) => {
+  const { pet } = companion();
+  const displays = [
+    { id: 1, workArea: { x: -1000, y: 0, width: 1000, height: 800 } },
+    { id: 2, workArea: { x: 0, y: 0, width: 1600, height: 1000 } },
+  ];
+  pet.displays = displays;
+  const surfaces = displays.map(display => {
+    const surface = { ready: true, shown: true, acceptsMouse: false,
+      win: { isDestroyed: () => false, getBounds: () => display.workArea, getContentBounds: () => display.workArea,
+        webContents: { send() {}, mainFrame: { processId: 7, routingId: 8 } }, hide() {}, setIgnoreMouseEvents() {} } };
+    pet.surfaces.set(display.id, surface);
+    return surface;
+  });
+  const [source, destination] = surfaces;
+  const cursor = { x: 300, y: 400 };
+  pet.trip.pet = createCompanionMotion(cursor, displays[1].workArea, 76);
+  pet.trip.press = { surface: source, offset: { x: 0, y: 0 }, dragging: true };
+  pet.paint(pet.trip.pet, 76, null);
+  pet.syncPetMouseRegion(cursor);
+  assert.ok(source.shown && source.acceptsMouse, 'source keeps capture until pointerup');
+  assert.ok(destination.shown && !destination.acceptsMouse, 'new surface does not steal the press');
+  assert.ok(JSON.parse(pet.surfaces.get(1).lastFrame).dog.x > displays[0].workArea.width, 'source sprite is outside the viewport');
+  assert.equal(JSON.parse(pet.surfaces.get(2).lastFrame).dog.x, cursor.x - 38);
+
+  // Left monitor at 150%, right monitor at 200%, with their physical edges
+  // meeting at x=0. The cursor moves away before the pointerup IPC arrives.
+  const drop = { x: 360, y: 450 };
+  let local = { x: drop.x + 1000, y: drop.y };
+  if (process.platform === 'win32') {
+    local = { x: 1000 + drop.x * 2 / 1.5, y: drop.y * 2 / 1.5 };
+    screen.dipToScreenRect = (win: unknown, rect: { x: number; y: number }) => {
+      assert.equal(win, source.win);
+      return { x: rect.x * 1.5, y: rect.y * 1.5 };
+    };
+    screen.screenToDipPoint = (point: { x: number; y: number }) => ({ x: point.x / 2, y: point.y / 2 });
+    t.after(() => { delete screen.dipToScreenRect; delete screen.screenToDipPoint; });
+  }
+  moveCursor({ x: -500, y: 200 });
+  pet.trip.lastTime = performance.now();
+  pet.companionGesture({ processId: 7, frameId: 8 }, source, 'release', local);
+  assert.deepEqual({ x: pet.trip.pet.x, y: pet.trip.pet.y }, drop);
+  assert.equal(source.shown, false);
+  assert.equal(source.acceptsMouse, false);
+  assert.ok(destination.shown && !destination.acceptsMouse, 'the pointer has already moved away from the drop');
 });

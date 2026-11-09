@@ -187,6 +187,13 @@ export function createCompanionMotion(pet, bounds, size) {
     actionQueue: [], lastAction: null, sleepQueue: [], lastSleep: null, workArea: area, spriteSize, suspended: false };
 }
 
+export function placeCompanionMotion(state, point, bounds) {
+  const area = workArea(bounds);
+  const position = clampPetCenter(point, area, state.spriteSize);
+  return beginSettle({ ...state, ...position, workArea: area, target: position, vx: 0, vy: 0,
+    activePose: null, pose: 'stand', frame: 0 }, 'walk');
+}
+
 export function stepCompanionMotion(previous, elapsedMs, {
   bounds = previous.workArea, size = previous.spriteSize, paused = false, reducedMotion = false, random = Math.random,
 } = {}) {

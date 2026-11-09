@@ -7,7 +7,7 @@ import koffi from 'koffi';
 
 // This smoke test owns a separate Electron profile. On Windows it saves and
 // restores the physical cursor, and clicks only a verified visible food button
-// or the companion dog when checking double-click restoration.
+// or the companion dog when checking dragging and double-click restoration.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifacts = path.join(root, 'artifacts');
 const userData = path.join(process.env.NIUMA_SMOKE_DATA_ROOT || artifacts, `pet-feeding-test-${Date.now()}`);
@@ -68,13 +68,13 @@ async function moveCursor(point) {
     `Physical cursor reaches requested DIP point: ${JSON.stringify({ point, actual })}`);
 }
 
-async function pointAt(page, selector) {
+async function pointAt(page, selector, heightFraction = 0.5) {
   const owner = await nativeWindow(page);
   assert.ok(owner?.visible);
   const box = await page.locator(selector).boundingBox();
   assert.ok(box, `Expected visible ${selector}`);
   return { x: owner.bounds.x + (box.x + box.width / 2) * owner.zoom,
-    y: owner.bounds.y + (box.y + box.height / 2) * owner.zoom };
+    y: owner.bounds.y + (box.y + box.height * heightFraction) * owner.zoom };
 }
 
 async function dogPosition(page, selector = '#desktop-dog') {
@@ -173,6 +173,49 @@ async function verifyDesktopFeedIgnored(page) {
   await expectNoDesktopFood(page);
 }
 
+async function dragCompanion(page, reducedMotion) {
+  const owner = await nativeWindow(page);
+  const cardBounds = (await nativeWindow(widget)).bounds;
+  let grab;
+  await expect.poll(async () => {
+    const center = await pointAt(page, '#desktop-dog');
+    grab = { x: center.x - 10, y: center.y + 24 };
+    await moveCursor(grab);
+    return cursorHitsCompanion(page);
+  }).toBe(true);
+  const start = await pointAt(page, '#desktop-dog');
+  const dx = start.x < owner.bounds.x + owner.bounds.width / 2 ? 145 : -145;
+  const dy = start.y < owner.bounds.y + owner.bounds.height / 2 ? 90 : -90;
+  const expected = { x: start.x + dx, y: start.y + dy };
+  const distanceFromDrop = async () => {
+    const center = await pointAt(page, '#desktop-dog');
+    return Math.hypot(center.x - expected.x, center.y - expected.y);
+  };
+  mouseEvent(0x0002, 0, 0, 0, 0);
+  try {
+    // The fast move leaves the original dog-sized hit region in one sample.
+    await moveCursor({ x: grab.x + dx, y: grab.y + dy });
+    await expect.poll(distanceFromDrop, { timeout: 4000 }).toBeLessThan(9);
+    await page.waitForTimeout(550);
+    assert.ok(await distanceFromDrop() < 9, 'The dog stays at the grab offset while the button is held');
+    assert.equal((await nativeWindow(widget)).visible, false);
+  } finally {
+    mouseEvent(0x0004, 0, 0, 0, 0);
+  }
+  await moveCursor(grab);
+  await expect.poll(async () => (await nativeWindow(page)).ignoresMouse).toBe(true);
+  if (reducedMotion) {
+    await page.waitForTimeout(350);
+    assert.ok(await distanceFromDrop() < 9, 'After release the quiet dog stays where the button was released');
+  } else {
+    await expect.poll(distanceFromDrop, { timeout: 8000 }).toBeGreaterThan(14);
+  }
+  assert.equal(await phase(), 'companion');
+  assert.deepEqual((await nativeWindow(widget)).bounds, cardBounds);
+  record(reducedMotion ? 'with reduced motion, the dog rests exactly where the physical drag ends'
+    : 'dragging the dog by its feet keeps the grab offset, releases the old mouse region and resumes roaming at the drop');
+}
+
 async function verify() {
   assert.equal(process.platform, 'win32', 'This test exercises Windows native pointer hit testing');
   desktop = await electron.launch({ executablePath,
@@ -243,6 +286,13 @@ async function verify() {
   observations.companionHover = { start, dog: await dogPosition(pet), native: await nativeWindow(pet) };
   record('companion keeps moving on hover without a food menu; owned and foreign feed calls cannot start a meal');
 
+  await dragCompanion(pet, false);
+  await pet.evaluate(() => window.petOverlay.setReducedMotion(true));
+  await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-reduced-motion', 'true');
+  await dragCompanion(pet, true);
+  await pet.evaluate(() => window.petOverlay.setReducedMotion(false));
+  await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-reduced-motion', 'false');
+
   // Reacquire the moving dog, then keep the physical pointer at the first click's location.
   await expect.poll(async () => {
     await moveCursor(await pointAt(pet, '#desktop-dog'));
@@ -262,15 +312,16 @@ async function verify() {
   await expect(widget.locator('.pet-food-menu')).toBeHidden();
   record('physical companion double-click restores the widget and its docked food menu');
 
-  const edge = { x: setup.area.x + setup.area.width - 90, y: setup.area.y + 110 };
+  const edge = { x: setup.area.x + setup.area.width - 3, y: setup.area.y + setup.area.height - 3 };
   await moveCursor(edge);
   await widget.evaluate(() => window.niuma.setDesktopPetMode({ active: true, reducedMotion: false }));
   await expect.poll(phase).toBe('chasing');
   await expect.poll(async () => Boolean(await petPage())).toBe(true);
   pet = await petPage();
+  await expect(pet.locator('#desktop-dog')).toHaveAttribute('data-pose', 'wag', { timeout: 15000 });
   await expect.poll(async () => {
-    const center = await pointAt(pet, '#desktop-dog');
-    return Math.hypot(center.x - (edge.x - 15), center.y - (edge.y + 18));
+    const [paws, bone] = await Promise.all([pointAt(pet, '#desktop-dog', 0.84), pointAt(pet, '#desktop-bone')]);
+    return Math.hypot(paws.x - bone.x, paws.y - bone.y);
   }, { timeout: 15000 }).toBeLessThan(3);
   await pet.waitForTimeout(450);
   await expectNoDesktopFood(pet);
@@ -278,7 +329,8 @@ async function verify() {
   await expect.poll(async () => (await nativeWindow(pet)).ignoresMouse).toBe(true);
   await verifyDesktopFeedIgnored(pet);
   assert.equal(await phase(), 'chasing');
-  observations.chaseArrival = { target: edge, dog: await dogPosition(pet), native: await nativeWindow(pet) };
+  observations.chaseArrival = { cursor: edge, bone: await pointAt(pet, '#desktop-bone'),
+    paws: await pointAt(pet, '#desktop-dog', 0.84), native: await nativeWindow(pet) };
   record('catching the cursor bone never opens food choices, ignores feed calls and keeps the native surface click-through');
   await widget.evaluate(() => window.niuma.setDesktopPetMode({ active: false, reducedMotion: false }));
   await expect(pet.locator('.pet-food-menu')).toBeHidden();

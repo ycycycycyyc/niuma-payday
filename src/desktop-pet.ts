@@ -24,6 +24,7 @@ declare global {
       surfaceReady(): void;
       restoreWidget?(): void;
       setRestoreTarget?(rect: { x: number; y: number; width: number; height: number } | null): void;
+      companionGesture?(phase: 'press' | 'drag' | 'release', point?: Point): void;
       feed?(food: PetFood): void;
       setReducedMotion?(reduced: boolean): void;
     };
@@ -54,6 +55,9 @@ const isInteractive = () => !sprite.hidden && sprite.dataset.interactive === 'tr
 const restoreTarget = createPetRestoreTarget(sprite, {
   enabled: isInteractive,
   onChange: rect => window.petOverlay?.setRestoreTarget?.(rect),
+  onPress: offset => window.petOverlay?.companionGesture?.('press', offset),
+  onDrag: (_center, first) => { if (first) window.petOverlay?.companionGesture?.('drag'); },
+  onRelease: point => window.petOverlay?.companionGesture?.('release', point),
 });
 window.addEventListener('pagehide', () => restoreTarget.destroy(), { once: true });
 function restoreWidget() {
@@ -154,6 +158,7 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen 
     handoffSerial++;
     clearPath();
     sprite.hidden = true;
+    restoreTarget.release();
     restoreTarget.clear();
     sprite.dataset.interactive = 'false';
     sprite.dataset.feedable = 'false';
@@ -170,7 +175,7 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen 
   // Switch hit and keyboard affordances immediately, even when a walking frame
   // is briefly buffered for smooth movement.
   sprite.dataset.interactive = String(Boolean(dog.interactive));
-  if (!dog.interactive) restoreTarget.clear();
+  if (!dog.interactive) { restoreTarget.release(); restoreTarget.clear(); }
   sprite.dataset.feedable = String(Boolean(dog.feedable));
   sprite.dataset.reducedMotion = String(Boolean(dog.reducedMotion) || motionPreference.matches);
   const acceptsInput = Boolean(dog.interactive || dog.feedable);
@@ -178,7 +183,7 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen 
   sprite.tabIndex = acceptsInput ? 0 : -1;
   sprite.setAttribute('aria-hidden', String(!acceptsInput));
   sprite.setAttribute('aria-label', dog.interactive ? '双击狗狗恢复浮窗' : '给狗狗喂食');
-  if (dog.interactive) sprite.title = '双击狗狗恢复浮窗';
+  if (dog.interactive) sprite.title = '拖动狗狗，双击恢复浮窗';
   else sprite.removeAttribute('title');
   if (handoff) {
     clearPath();
