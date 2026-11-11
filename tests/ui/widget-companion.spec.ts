@@ -81,6 +81,8 @@ test('after a drag, a moving companion accepts both clicks at its first trailing
   const before = await floatingCard(page).boundingBox();
   await minimize(page);
   const dog = companionDog(page);
+  // Hold the animation frame while measuring and pressing the same grip point.
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 1000));
   const take = await position(dog);
   await page.mouse.move(take.x + take.width / 2, take.y + take.height / 2);
   await page.mouse.down();
