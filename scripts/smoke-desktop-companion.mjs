@@ -39,29 +39,24 @@ const preferences = value => ({
 });
 
 async function paintedDogs() {
-  const native = await windows();
   const dogs = [];
   for (const page of desktop.windows()) {
-    const owner = native.find(win => win.url === page.url());
-    if (!owner?.visible || owner.minimized || page.isClosed()) continue;
-    if (isPetPage(page)) {
-      const dog = await page.evaluate(() => {
-        const element = document.getElementById('desktop-dog');
-        if (!element || element.hidden || !element.getClientRects().length) return null;
-        const rect = element.getBoundingClientRect();
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2,
-          size: rect.width, pose: element.dataset.pose, frame: element.dataset.frame,
-          interactive: element.dataset.interactive };
-      }).catch(error => { if (!page.isClosed()) throw error; return null; });
-      if (dog) dogs.push({ ...dog, x: dog.x + owner.bounds.x, y: dog.y + owner.bounds.y, page });
-    } else if (page.url().endsWith('#/widget')) {
-      const dog = await page.locator('.widget-dog').evaluate(element => {
-        if (element.hidden || !element.getClientRects().length) return null;
-        const rect = element.getBoundingClientRect();
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, size: rect.width };
-      });
-      if (dog) dogs.push({ ...dog, x: dog.x + owner.bounds.x, y: dog.y + owner.bounds.y, page });
-    }
+    const selector = isPetPage(page) ? '#desktop-dog' : page.url().endsWith('#/widget') ? '.widget-dog' : null;
+    if (!selector || page.isClosed()) continue;
+    const handle = await desktop.browserWindow(page);
+    let zoom;
+    try {
+      zoom = await handle.evaluate(win => win.isVisible() && !win.isMinimized() ? win.webContents.getZoomFactor() : 0);
+    } finally { await handle.dispose(); }
+    if (!zoom) continue;
+    const dog = await page.evaluate(({ selector, zoom }) => {
+      const element = document.querySelector(selector);
+      if (!element || element.hidden || !element.getClientRects().length) return null;
+      const rect = element.getBoundingClientRect();
+      return { x: window.screenX + (rect.x + rect.width / 2) * zoom, y: window.screenY + (rect.y + rect.height / 2) * zoom,
+        size: rect.width * zoom, pose: element.dataset.pose, frame: element.dataset.frame, interactive: element.dataset.interactive };
+    }, { selector, zoom }).catch(error => { if (!page.isClosed()) throw error; return null; });
+    if (dog) dogs.push({ ...dog, zoom, page });
   }
   return dogs;
 }
@@ -145,18 +140,19 @@ async function verify() {
   assert.deepEqual((await widgetWindow()).bounds, originalBounds);
   record('minimize button hides the card and leaves one interactive dog at its starting location');
 
-  const samples = await start.page.evaluate(() => new Promise(resolve => {
+  const samples = await start.page.evaluate(zoom => new Promise(resolve => {
     const values = [];
     const started = performance.now();
     const sample = () => {
       const dog = document.getElementById('desktop-dog');
       const rect = dog.getBoundingClientRect();
-      values.push({ x: rect.x, y: rect.y, pose: dog.dataset.pose, frame: dog.dataset.frame });
+      values.push({ x: window.screenX + (rect.x + rect.width / 2) * zoom, y: window.screenY + (rect.y + rect.height / 2) * zoom,
+        pose: dog.dataset.pose, frame: dog.dataset.frame });
       if (performance.now() - started < 5_000) setTimeout(sample, 100);
       else resolve(values);
     };
     sample();
-  }));
+  }), start.zoom);
   const movement = Math.max(...samples.map(value => Math.hypot(value.x - samples[0].x, value.y - samples[0].y)));
   const poses = [...new Set(samples.map(value => `${value.pose}:${value.frame}`))];
   observations.autonomous = { movement, poses };
@@ -214,9 +210,10 @@ async function verify() {
   const reduced = await minimize();
   await reduced.page.evaluate(() => window.petOverlay.setReducedMotion(true));
   await expect.poll(async () => reduced.page.locator('#desktop-dog').getAttribute('data-reduced-motion')).toBe('true');
-  const quietPosition = await reduced.page.locator('#desktop-dog').boundingBox();
+  const quietPosition = await companionDog();
   await reduced.page.waitForTimeout(300);
-  assert.deepEqual(await reduced.page.locator('#desktop-dog').boundingBox(), quietPosition);
+  const still = await companionDog();
+  assert.deepEqual([still.x, still.y, still.size], [quietPosition.x, quietPosition.y, quietPosition.size]);
   await restoreByDoubleClick();
   record('reduced-motion companion stays still and still supports double-click restoration');
 

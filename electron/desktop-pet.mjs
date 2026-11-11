@@ -24,6 +24,14 @@ function enclosingRect(x, y, width, height) {
   return { x: left, y: top, width: Math.ceil(x + width) - left, height: Math.ceil(y + height) - top };
 }
 
+function macCompanionBounds(pet, size, area, anchor) {
+  const left = Math.max(area.x, Math.floor(Math.min(pet.x - size / 2, anchor?.x ?? Infinity)));
+  const top = Math.max(area.y, Math.floor(Math.min(pet.y - size / 2, anchor?.y ?? Infinity)));
+  const right = Math.min(area.x + area.width, Math.ceil(Math.max(pet.x + size / 2, anchor ? anchor.x + anchor.width : -Infinity)));
+  const bottom = Math.min(area.y + area.height, Math.ceil(Math.max(pet.y + size / 2, anchor ? anchor.y + anchor.height : -Infinity)));
+  return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
+}
+
 function hideSurface(surface) {
   if (!surface.shown || surface.win.isDestroyed()) return;
   surface.win.webContents.send('niuma:desktop-pet-frame', { dog: null, bone: null, sampleTime: performance.now() });
@@ -36,6 +44,8 @@ function hideSurface(surface) {
 }
 
 function companionReleasePoint(surface, client) {
+  // Moving Mac panels send the WindowServer position at mouseup, in screen DIPs.
+  if (surface.macCompanionPanel) return { x: Math.round(client.x), y: Math.round(client.y) };
   // This unzoomed renderer reports CSS pixels relative to the capturing window.
   const bounds = surface.win.getContentBounds();
   const point = { x: Math.round(bounds.x + client.x), y: Math.round(bounds.y + client.y) };
@@ -80,7 +90,7 @@ function createSurface(area, root, developmentURL) {
       ? win.loadURL(new URL('/pet.html', developmentURL).href)
       : win.loadFile(path.join(root, 'dist', 'pet.html'));
     return { win, loading, createdAt, ready: false, prepared: false, shown: false, lastFrame: '',
-      nativeCompanionShape: process.platform === 'win32' };
+      nativeCompanionShape: process.platform === 'win32', macCompanionPanel: process.platform === 'darwin' };
   } catch (error) {
     win.destroy();
     throw error;
@@ -180,7 +190,8 @@ export class DesktopPet {
     if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
         Math.abs(rect.width - trip.size) > .1 || Math.abs(rect.height - trip.size) > .1) return;
     const bounds = surface.win.getContentBounds();
-    const x = bounds.x + rect.x, y = bounds.y + rect.y;
+    const x = surface.macCompanionPanel ? rect.x : bounds.x + rect.x;
+    const y = surface.macCompanionPanel ? rect.y : bounds.y + rect.y;
     if (Math.abs(x + rect.width / 2 - trip.pet.x) > trip.size ||
         Math.abs(y + rect.height / 2 - trip.pet.y) > trip.size) return;
     // Keep only the first click's input target still. The dog and its animation
@@ -247,7 +258,7 @@ export class DesktopPet {
       const press = this.trip?.press;
       const overSurface = cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height;
       const accepts = Boolean(surface.shown && canInteract && (press ? press.surface === surface :
-        surface.nativeCompanionShape || (hit && overSurface)));
+        surface.nativeCompanionShape || surface.macCompanionPanel || (hit && overSurface)));
       if (accepts !== Boolean(surface.acceptsMouse)) {
         surface.win.setIgnoreMouseEvents(!accepts);
         surface.acceptsMouse = accepts;
@@ -495,7 +506,7 @@ export class DesktopPet {
     for (const [id, surface] of this.surfaces) {
       const display = this.displays.find(d => d.id === id);
       if (display) {
-        surface.win.setBounds(display.workArea);
+        if (!(surface.macCompanionPanel && this.state.phase === 'companion')) surface.win.setBounds(display.workArea);
         surface.lastFrame = '';
       } else {
         this.surfaces.delete(id);
@@ -569,8 +580,23 @@ export class DesktopPet {
       const surface = this.surface(display);
       if (!surface.ready) continue;
       const { win } = surface;
-      const bounds = win.getContentBounds();
+      let bounds = win.getContentBounds();
+      const compact = surface.macCompanionPanel && this.state.phase === 'companion';
+      if (surface.macCompanionPanel) {
+        const anchor = this.trip?.restoreTarget;
+        const retained = anchor?.surface === surface && anchor.until > sampleTime ? anchor : null;
+        // The panel itself is the hit region. Keep the original panel at its last
+        // location during a cross-display drag so its captured pointer can finish.
+        const next = compact ? macCompanionBounds(pet, size, area, retained) : area;
+        if (next && (next.x !== bounds.x || next.y !== bounds.y || next.width !== bounds.width || next.height !== bounds.height)) {
+          if (!compact && surface.acceptsMouse) { win.setIgnoreMouseEvents(true); surface.acceptsMouse = false; }
+          win.setBounds(next, false);
+          bounds = win.getContentBounds();
+          surface.lastFrame = ''; // Even identical local dog coordinates can have a new screen origin.
+        }
+      }
       const frame = {
+        ...(compact ? { compact: true } : {}),
         dog: dogHere ? { x: left - bounds.x, y: top - bounds.y, size, facing: pet.facing, pose: pet.pose, frame: pet.frame,
           vx: pet.vx, vy: pet.vy, interactive: this.state.phase === 'companion',
           feedable: false, reducedMotion: Boolean(this.trip?.reduced) } : null,

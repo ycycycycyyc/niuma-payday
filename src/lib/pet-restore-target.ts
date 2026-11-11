@@ -5,6 +5,7 @@ type Point = { x: number; y: number };
 
 type RestoreTargetOptions = {
   enabled?: () => boolean;
+  screenCoordinates?: () => boolean;
   onChange?: (rect: PetRestoreRect | null) => void;
   onPress?: (offset: Point) => void;
   onDrag?: (center: Point, first: boolean) => void;
@@ -30,6 +31,12 @@ export function createPetRestoreTarget(button: HTMLButtonElement, options: Resto
   let press: { id: number; start: Point; offset: Point; target: Element; dragging: boolean } | null = null;
   let clicksSinceDrag = 2;
 
+  // The Mac companion panel moves with the dog. Capture its input and the
+  // first-click rectangle in screen points so both survive a panel move.
+  function pointerPoint(event: PointerEvent) {
+    return options.screenCoordinates?.() ? { x: event.screenX, y: event.screenY } : { x: event.clientX, y: event.clientY };
+  }
+
   function enabled() {
     return !destroyed && button.isConnected && !button.hidden && !button.disabled && (options.enabled?.() ?? true);
   }
@@ -53,7 +60,9 @@ export function createPetRestoreTarget(button: HTMLButtonElement, options: Resto
     if (!current.width || !current.height) { clear(); return; }
     target.style.width = `${anchor.width}px`;
     target.style.height = `${anchor.height}px`;
-    target.style.transform = `translate3d(${anchor.x - current.x}px, ${anchor.y - current.y}px, 0)`;
+    const originX = options.screenCoordinates?.() ? window.screenX : 0;
+    const originY = options.screenCoordinates?.() ? window.screenY : 0;
+    target.style.transform = `translate3d(${anchor.x - originX - current.x}px, ${anchor.y - originY - current.y}px, 0)`;
   }
 
   function arm(event: PointerEvent) {
@@ -64,8 +73,10 @@ export function createPetRestoreTarget(button: HTMLButtonElement, options: Resto
     sync();
     const rect = button.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
+    const point = pointerPoint(event);
     if (!anchor) {
-      anchor = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      anchor = { x: point.x - event.clientX + rect.x, y: point.y - event.clientY + rect.y,
+        width: rect.width, height: rect.height };
       expiresAt = performance.now() + PET_RESTORE_TARGET_MS;
       timer = setTimeout(clear, PET_RESTORE_TARGET_MS);
       sync();
@@ -75,7 +86,7 @@ export function createPetRestoreTarget(button: HTMLButtonElement, options: Resto
         event.clientY < rect.top || event.clientY >= rect.bottom) return;
     const offset = { x: rect.x + rect.width / 2 - event.clientX, y: rect.y + rect.height / 2 - event.clientY };
     const capture = event.target instanceof Element ? event.target : button;
-    press = { id: event.pointerId, start: { x: event.clientX, y: event.clientY }, offset, target: capture, dragging: false };
+    press = { id: event.pointerId, start: point, offset, target: capture, dragging: false };
     // Keep down/up on the same element for Chromium's native double-click.
     if (event.isTrusted) capture.setPointerCapture(event.pointerId);
     options.onPress?.(offset);
@@ -85,14 +96,15 @@ export function createPetRestoreTarget(button: HTMLButtonElement, options: Resto
     if (!press || press.id !== event.pointerId) return;
     if (event.type === 'pointermove' && !(event.buttons & 1)) { release(); return; }
     const first = !press.dragging;
-    if (first && Math.hypot(event.clientX - press.start.x, event.clientY - press.start.y) < 5) return;
+    const point = pointerPoint(event);
+    if (first && Math.hypot(point.x - press.start.x, point.y - press.start.y) < 5) return;
     if (first) {
       press.dragging = true;
       clicksSinceDrag = 0;
       button.dataset.dragging = 'true';
       clear();
     }
-    options.onDrag?.({ x: event.clientX + press.offset.x, y: event.clientY + press.offset.y }, first);
+    options.onDrag?.({ x: point.x + press.offset.x, y: point.y + press.offset.y }, first);
   }
 
   function release(clientPoint?: Point) {
@@ -108,7 +120,7 @@ export function createPetRestoreTarget(button: HTMLButtonElement, options: Resto
     if (press?.id !== event.pointerId) return;
     if (event.type === 'pointerup') {
       move(event);
-      release({ x: event.clientX, y: event.clientY });
+      release(pointerPoint(event));
     } else release();
   }
 

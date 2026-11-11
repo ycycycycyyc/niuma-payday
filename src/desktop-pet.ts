@@ -10,7 +10,7 @@ type Dog = Point & {
   interactive?: boolean; feedable?: boolean; reducedMotion?: boolean;
 };
 type Frame = {
-  dog: Dog | null; bone: Point | null; sampleTime: number; handoff?: boolean;
+  dog: Dog | null; bone: Point | null; sampleTime: number; handoff?: boolean; compact?: boolean;
   feeding?: PetFeedingState | null; menuOpen?: boolean;
 };
 type Sample = { dog: Dog; time: number };
@@ -51,9 +51,11 @@ const reportMotionPreference = () => window.petOverlay?.setReducedMotion?.(motio
 reportMotionPreference();
 motionPreference.addEventListener('change', reportMotionPreference);
 
+let compactPanel = false;
 const isInteractive = () => !sprite.hidden && sprite.dataset.interactive === 'true';
 const restoreTarget = createPetRestoreTarget(sprite, {
   enabled: isInteractive,
+  screenCoordinates: () => compactPanel,
   onChange: rect => window.petOverlay?.setRestoreTarget?.(rect),
   onPress: offset => window.petOverlay?.companionGesture?.('press', offset),
   onDrag: (_center, first) => { if (first) window.petOverlay?.companionGesture?.('drag'); },
@@ -149,7 +151,8 @@ function clearPath() {
   samples = [];
 }
 
-window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen }) => {
+window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, compact, feeding, menuOpen }) => {
+  compactPanel = Boolean(compact);
   currentFeeding = dog?.feedable ? feeding ?? null : null;
   foodMenuOpen = Boolean(dog?.feedable && menuOpen && !currentFeeding);
   cursorBone.hidden = bone === null;
@@ -199,7 +202,9 @@ window.petOverlay?.onFrame(({ dog, bone, sampleTime, handoff, feeding, menuOpen 
     });
     return;
   }
-  if (dog.pose !== 'walk' || currentFeeding || foodMenuOpen) {
+  // A compact Mac panel follows the dog in native screen space. Its local
+  // coordinates change when the panel moves, so never interpolate between them.
+  if (compactPanel || dog.pose !== 'walk' || currentFeeding || foodMenuOpen) {
     clearPath();
     paint(dog, dog.x, dog.y);
     return;
